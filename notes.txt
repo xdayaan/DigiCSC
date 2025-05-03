@@ -1,0 +1,14 @@
+PostgreSQL:
+
+Host: localhost
+Port: 5432
+User: digicsc
+Password: digicsc_password
+Database: digicsc_db
+MongoDB:
+
+Host: localhost
+Port: 27017
+User: digicsc
+Password: digicsc_password
+Authentication Database: admin
