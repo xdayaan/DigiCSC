@@ -4,16 +4,31 @@ from sqlalchemy.orm import Session
 from app.db.postgres import get_db
 from app.models.sql_models import User as DBUser
 from app.schemas.user import User, UserCreate, UserUpdate
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter()
 
 @router.post("/", response_model=User, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    db_user = DBUser(name=user.name, phone=user.phone, language=user.language)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    # Check if a user with the same phone number already exists
+    existing_user = db.query(DBUser).filter(DBUser.phone == user.phone).first()
+    if existing_user:
+        # If user exists, return it instead of creating a new one
+        # This prevents duplicate registrations and helps with app re-installs
+        return existing_user
+    
+    try:
+        db_user = DBUser(name=user.name, phone=user.phone, language=user.language)
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        return db_user
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A user with this phone number already exists"
+        )
 
 @router.get("/", response_model=List[User])
 def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):

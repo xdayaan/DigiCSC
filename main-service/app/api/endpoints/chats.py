@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List, Optional
+from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
 from app.db.postgres import get_db
 from app.models.sql_models import ChatRelation as DBChatRelation, User as DBUser
@@ -7,6 +7,18 @@ from app.schemas.chat import Chat, ChatCreate, ChatMessage, ChatMessageCreate, C
 from app.db.mongodb import get_mongo_db
 from datetime import datetime
 import uuid
+from app.services.ai_service import gemini_service
+from app.models.nosql_models import MessageSender, MessageType
+from pydantic import BaseModel
+
+# Add a model for text-to-speech responses
+class TextToSpeechResponse(BaseModel):
+    audio_content: str  # Base64-encoded audio content
+
+# Add a model for TTS requests
+class TextToSpeechRequest(BaseModel):
+    text: str
+    language_code: str = "en-US"
 
 router = APIRouter()
 
@@ -63,10 +75,11 @@ async def read_user_chats(user_id: int, db: Session = Depends(get_db), mongo_db=
     
     return chats
 
-@router.post("/{chat_id}/messages", response_model=ChatMessage, status_code=status.HTTP_201_CREATED)
+@router.post("/{chat_id}/messages", response_model=List[ChatMessage], status_code=status.HTTP_201_CREATED)
 async def add_message(
     chat_id: str, 
     message: ChatMessageCreate, 
+    db: Session = Depends(get_db),
     mongo_db=Depends(get_mongo_db)
 ):
     # Check if chat exists
@@ -89,7 +102,42 @@ async def add_message(
         }
     )
     
-    return new_message
+    # Get user's preferred language
+    user = db.query(DBUser).filter(DBUser.id == message.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Only generate AI response if the message is from the user
+    if message.sent_from == MessageSender.USER:
+        # Generate AI response using Gemini
+        ai_response_text = await gemini_service.generate_chat_response(
+            message=message.text,
+            language=user.language
+        )
+        
+        # Create AI message
+        ai_message = {
+            "user_id": message.user_id,
+            "sent_from": MessageSender.AI,
+            "type": MessageType.TEXT,
+            "text": ai_response_text,
+            "created_at": datetime.utcnow()
+        }
+        
+        # Add AI message to chat
+        await mongo_db.chats.update_one(
+            {"chat_id": chat_id},
+            {
+                "$push": {"messages": ai_message},
+                "$set": {"updated_at": datetime.utcnow()}
+            }
+        )
+        
+        # Return both user message and AI response
+        chat = await mongo_db.chats.find_one({"chat_id": chat_id})
+        return chat.get("messages", [])[-2:]  # Return the last 2 messages
+    
+    return [new_message]
 
 @router.get("/{chat_id}/messages", response_model=List[ChatMessage])
 async def get_messages(chat_id: str, mongo_db=Depends(get_mongo_db)):
@@ -113,3 +161,16 @@ async def delete_chat(chat_id: str, db: Session = Depends(get_db), mongo_db=Depe
     db.commit()
     
     return None
+
+@router.post("/text-to-speech", response_model=TextToSpeechResponse)
+async def convert_text_to_speech(request: TextToSpeechRequest):
+    """Convert text to speech and return base64-encoded audio content."""
+    audio_content = await gemini_service.generate_speech_from_text(
+        text=request.text, 
+        language_code=request.language_code
+    )
+    
+    if not audio_content:
+        raise HTTPException(status_code=500, detail="Failed to generate speech")
+    
+    return TextToSpeechResponse(audio_content=audio_content)

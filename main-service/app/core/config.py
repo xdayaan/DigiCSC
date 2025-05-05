@@ -19,5 +19,9 @@ class Settings(BaseModel):
     # MongoDB settings
     MONGO_URI: str = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     MONGO_DB: str = os.getenv("MONGO_DB", "digicsc")
+    
+    # Gemini AI settings
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-pro")
 
 settings = Settings()
