@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: digicsc-postgres
+    environment:
+      POSTGRES_USER: digicsc
+      POSTGRES_PASSWORD: digicsc_password
+      POSTGRES_DB: digicsc_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/db-data/postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U digicsc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:6
+    container_name: digicsc-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: digicsc
+      MONGO_INITDB_ROOT_PASSWORD: digicsc_password
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./docker/db-data/mongo:/data/db
+    restart: unless-stopped
+    command: mongod --auth
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/admin -u digicsc -p digicsc_password --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+  backend:
+    build:
+      context: ./main-service
+      dockerfile: ./docker/Dockerfile
+    container_name: digicsc-backend
+    environment:
+      - POSTGRES_USER=digicsc
+      - POSTGRES_PASSWORD=digicsc_password
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=digicsc_db
+      - MONGODB_URL=mongodb://digicsc:digicsc_password@mongodb:27017/digicsc?authSource=admin
+      - PORT=8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # For development only - in production, you would typically
+  # build the frontend as static assets and serve them separately
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: ./docker/Dockerfile.dev
+    container_name: digicsc-frontend-dev
+    environment:
+      - EXPO_PUBLIC_API_URL=http://backend:8000
+    ports:
+      - "19000:19000"
+      - "19001:19001"
+      - "19002:19002"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - backend
