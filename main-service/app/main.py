@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api import users, chats, uploads
+from app.websockets import router as websocket_router
 from app.core.config import settings
 from app.db.mongodb import connect_to_mongo, close_mongo_connection
 
@@ -20,6 +21,9 @@ app.add_middleware(
 app.include_router(users.router, prefix=settings.API_V1_STR)
 app.include_router(chats.router, prefix=settings.API_V1_STR)
 app.include_router(uploads.router, prefix=settings.API_V1_STR)
+
+# Include WebSocket router - adding it directly without a prefix
+app.include_router(websocket_router)
 
 # Mount static files for direct access to uploaded files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")

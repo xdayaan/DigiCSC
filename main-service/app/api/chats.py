@@ -4,8 +4,8 @@ from app.db.postgres import get_db
 from app.db.repositories.chat_repository import ChatRepository
 from app.db.repositories.user_repository import UserRepository
 from app.schemas.chat import Chat, ChatCreate, ChatMessageCreate, MessageResponse, ChatResponse
-from app.schemas.chat import MessageSender
-from app.utils.gemini_assistant import GeminiAssistant, ResponseType, AutomationTask
+from app.schemas.chat import MessageSender, format_messages_for_gemini
+from app.utils.gemini_assistant import GeminiAssistant
 from typing import List
 import json
 
@@ -100,36 +100,32 @@ async def add_message(
     
     # If the message is from user, process it with Gemini and generate a response
     if message.sent_from == MessageSender.USER:
+        # Get the full chat history for context
+        updated_chat = await chat_repo.get_chat(chat_id)
+        
+        if not updated_chat or not updated_chat.messages:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not retrieve updated chat history"
+            )
+            
+        # Format the chat messages into a conversational format that Gemini can understand
+        formatted_chat_history = format_messages_for_gemini(updated_chat.messages)
+        print(f"FORMATTED CHAT HISTORY: {formatted_chat_history}")
+        
         gemini = GeminiAssistant()
-        analysis = await gemini.analyze_message(message.text, user.preferred_language)
+        # Process the formatted chat history
+        response_text, automation_type = await gemini.process_chat(
+            chat_history=formatted_chat_history, 
+            language=user.preferred_language
+        )
         
         # Create the AI response based on the analysis
         ai_message = ChatMessageCreate(
             sent_from=MessageSender.AI,
             type=message.type,
-            text=""  # Will be filled based on analysis
+            text=response_text
         )
-        
-        # Handle the response based on the analysis
-        response_type = analysis.get("response_type")
-        
-        if response_type == ResponseType.AUTOMATION.value:
-            # Get the specific automation task if available
-            automation_task = analysis.get("automation_task", AutomationTask.OTHER.value)
-            # Start the automation process and get the appropriate response
-            ai_message.text = await gemini.start_automation(message.text, automation_task)
-        
-        elif response_type == ResponseType.FREELANCER.value:
-            ai_message.text = f"Please connect with a freelancer for assistance with this request."
-            # You could add more detailed freelancer routing logic here
-        
-        elif response_type == ResponseType.PAN_CARD.value:
-            # If PAN card request, process through the PAN card handler and call make_pan_card
-            ai_message.text = await gemini.handle_pan_card(message.text, chat_id, chat.user_id, user.preferred_language)
-        
-        else:  # AI_RESPONSE
-            # Generate an AI response in the user's preferred language
-            ai_message.text = await gemini.generate_response(message.text, user.preferred_language)
         
         # Add the AI response to the chat
         await chat_repo.add_message(chat_id, ai_message, chat.user_id)

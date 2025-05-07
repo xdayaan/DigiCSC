@@ -1,18 +1,19 @@
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, status, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, status
 from app.websockets.connection_manager import manager
-from app.db.repositories.user_repository import get_user_by_id
+from app.db.repositories.user_repository import UserRepository
+from app.db.postgres import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
-    """WebSocket endpoint with authentication support"""
-    # Accept the connection with authentication check
-    connection_success = await manager.connect(websocket, token)
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint without authentication"""
+    # Accept the connection without authentication check
+    connection_success = await manager.connect(websocket)
     if not connection_success:
         # Connection was rejected in the manager
         return

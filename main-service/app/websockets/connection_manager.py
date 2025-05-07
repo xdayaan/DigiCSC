@@ -16,13 +16,10 @@ class ConnectionManager:
         # Store chat IDs for call tracking (call_id -> {"from": user_id, "to": user_id, "chat_id": chat_id})
         self.active_calls: Dict[str, dict] = {}
 
-    async def connect(self, websocket: WebSocket, token: Optional[str] = None):
-        """Accept a new WebSocket connection with authentication"""
+    async def connect(self, websocket: WebSocket):
+        """Accept a new WebSocket connection without authentication"""
         try:
-            # Validate token or other authentication parameters if needed
-            # If token is None, it means we're allowing anonymous connections initially
-            # and will validate during the registration message
-            
+            # No authentication check - accept all connections
             await websocket.accept()
             logger.info("WebSocket connection accepted")
             return True
@@ -34,17 +31,25 @@ class ConnectionManager:
         
     async def disconnect(self, user_id: Optional[int] = None, websocket: Optional[WebSocket] = None):
         """Disconnect a user's WebSocket connection"""
-        if user_id is not None and user_id in self.active_connections:
-            await self.active_connections[user_id].close()
-            del self.active_connections[user_id]
-            logger.info(f"User {user_id} disconnected")
-        elif websocket is not None:
-            # Find user ID by websocket
-            for uid, ws in list(self.active_connections.items()):
-                if ws == websocket:
-                    del self.active_connections[uid]
-                    logger.info(f"User {uid} disconnected (by websocket)")
-                    break
+        try:
+            if user_id is not None and user_id in self.active_connections:
+                try:
+                    if self.active_connections[user_id].client_state != WebSocketState.DISCONNECTED:
+                        await self.active_connections[user_id].close()
+                except RuntimeError as e:
+                    logger.info(f"WebSocket for user {user_id} was already closed: {e}")
+                # Remove from active connections regardless of close success
+                del self.active_connections[user_id]
+                logger.info(f"User {user_id} disconnected")
+            elif websocket is not None:
+                # Find user ID by websocket
+                for uid, ws in list(self.active_connections.items()):
+                    if ws == websocket:
+                        del self.active_connections[uid]
+                        logger.info(f"User {uid} disconnected (by websocket)")
+                        break
+        except Exception as e:
+            logger.error(f"Error during disconnect: {str(e)}")
 
     async def register_user(self, user_id: int, websocket: WebSocket):
         """Register a user's WebSocket connection"""
