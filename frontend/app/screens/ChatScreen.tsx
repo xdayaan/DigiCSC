@@ -13,8 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '../services/AuthContext';
-import { chatApi, ApiChat, ApiMessage, uploadDocument } from '../services/api';
-import { Chat, Message, MessageSender, MessageType, Language } from '../services/types';
+import { chatApi, ApiChat, ApiMessage, uploadDocument, userApi } from '../services/api';
+import { Chat, Message, MessageSender, MessageType, Language, UserType } from '../services/types';
 import { Colors } from '@/constants/Colors';
 import { IconSymbol } from '@/components/ui/IconSymbol';
 import { uuid } from '../utils/helpers';
@@ -24,6 +24,8 @@ const ChatScreen = () => {
   const params = useLocalSearchParams();
   const { user } = useAuth();
   const chatId = params.chatId as string | undefined;
+  const isFreelancerMode = params.isFreelancerMode === 'true';
+  const customerId = params.customerId as string | undefined;
   
   const [currentChat, setCurrentChat] = useState<Chat | null>(null);
   const [chats, setChats] = useState<Chat[]>([]);
@@ -35,12 +37,38 @@ const ChatScreen = () => {
   const [currentlySpeakingId, setCurrentlySpeakingId] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [typingTimeout, setTypingTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [customerInfo, setCustomerInfo] = useState<any>(null);
   
   const messageInputRef = useRef<TextInput>(null);
 
   // Handler for changing language
   const navigateToLanguageSettings = () => {
     router.push('/screens/LanguageScreen');
+  };
+  
+  // Fetch customer info if in freelancer mode
+  useEffect(() => {
+    if (isFreelancerMode && customerId && user?.user_type === UserType.FREELANCER) {
+      const fetchCustomerInfo = async () => {
+        try {
+          const response = await userApi.getUser(parseInt(customerId));
+          setCustomerInfo(response);
+        } catch (error) {
+          console.error("Error fetching customer info:", error);
+        }
+      };
+      fetchCustomerInfo();
+    }
+  }, [isFreelancerMode, customerId, user]);
+  
+  // Set page title based on mode
+  const getPageTitle = () => {
+    if (isFreelancerMode && customerInfo) {
+      return `Chat with ${customerInfo.name}`;
+    } else if (currentChat) {
+      return currentChat.title;
+    }
+    return "New Chat";
   };
   
   const sidebarAnimation = useSharedValue(0);
@@ -87,23 +115,27 @@ const ChatScreen = () => {
             
             // Map API messages to component message format
             const chatMessages: Message[] = chat.messages.map((msg: ApiMessage) => ({
-              id: `${msg.user_id}-${msg.created_at}`,
+              id: msg.message_id || `${msg.user_id}-${msg.created_at}`,
               text: msg.text || "",
               sender: msg.sent_from as MessageSender,
               timestamp: new Date(msg.created_at),
               status: 'sent',
               docLink: msg.doc_link || undefined,
               docType: msg.type === 'document' ? 'document' : undefined,
+              freelancerId: msg.freelancer_id
             }));
             
             // Create formatted chat object
             return {
               id: chat.chat_id,
-              title: `Chat ${chat.chat_id.substring(0, 8)}...`,
+              title: isFreelancerMode && customerInfo 
+                ? `Chat with ${customerInfo.name}` 
+                : `Chat ${chat.chat_id.substring(0, 8)}...`,
               lastMessage: lastApiMessage?.text || "No messages yet",
               timestamp: new Date(chat.updated_at),
               unreadCount: 0, // This would need to come from the API if available
               messages: chatMessages,
+              userId: chat.user_id
             };
           });
           
@@ -132,11 +164,14 @@ const ChatScreen = () => {
             if (newChat) {
               const formattedChat: Chat = {
                 id: newChat.chat_id,
-                title: `Chat ${newChat.chat_id.substring(0, 8)}...`,
+                title: isFreelancerMode && customerInfo 
+                  ? `Chat with ${customerInfo.name}` 
+                  : `Chat ${newChat.chat_id.substring(0, 8)}...`,
                 lastMessage: "New conversation started",
                 timestamp: new Date(newChat.created_at),
                 unreadCount: 0,
-                messages: []
+                messages: [],
+                userId: newChat.user_id
               };
               setChats([formattedChat]);
               setCurrentChat(formattedChat);
@@ -154,7 +189,7 @@ const ChatScreen = () => {
     };
     
     fetchUserChats();
-  }, [user, chatId]);
+  }, [user, chatId, isFreelancerMode, customerInfo]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen(prev => !prev);
@@ -178,7 +213,7 @@ const ChatScreen = () => {
     }
     
     // Set new timeout if text is not empty
-    if (text.trim()) {
+    if (text.trim() && !isFreelancerMode) {
       const newTimeout = setTimeout(() => {
         handleSendMessage();
       }, 2000);
@@ -274,8 +309,8 @@ const ChatScreen = () => {
     
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     
-    // Check if message is "freelancer" (case insensitive)
-    if (newMessage.trim().toLowerCase() === "freelancer") {
+    // Check if message is "freelancer" (case insensitive) and user is not a freelancer
+    if (newMessage.trim().toLowerCase() === "freelancer" && user.user_type !== UserType.FREELANCER) {
       // Redirect to FreelancerScreen
       setNewMessage('');
       router.push('/screens/FreelancerScreen');
@@ -285,13 +320,17 @@ const ChatScreen = () => {
     // Generate temporary ID for optimistic update
     const tempMessageId = uuid();
     
+    // Determine message sender based on user type
+    const senderType = user.user_type === UserType.FREELANCER ? MessageSender.FREELANCER : MessageSender.USER;
+    
     // Optimistically add message to UI
     const newMsg: Message = {
       id: tempMessageId,
       text: newMessage.trim(),
-      sender: MessageSender.USER,
+      sender: senderType,
       timestamp: new Date(),
-      status: 'sending'
+      status: 'sending',
+      freelancerId: user.user_type === UserType.FREELANCER ? user.id : undefined
     };
     
     setMessages(prev => [...prev, newMsg]);
@@ -299,14 +338,14 @@ const ChatScreen = () => {
 
     try {
       // Send the message to the backend API
-      const sentMessage = await chatApi.sendMessage(
-        currentChat.id,
-        {
-          sent_from: MessageSender.USER,
-          type: MessageType.TEXT,
-          text: newMsg.text,
-        }
-      );
+      const messageData = {
+        sent_from: senderType,
+        type: MessageType.TEXT,
+        text: newMsg.text,
+        freelancer_id: user.user_type === UserType.FREELANCER ? user.id : undefined,
+      };
+      
+      const sentMessage = await chatApi.sendMessage(currentChat.id, messageData);
 
       // Update the message with the server response
       setMessages(prev => 
@@ -317,70 +356,133 @@ const ChatScreen = () => {
         } : msg)
       );
 
-      setIsLoading(true);
+      // Only wait for AI response if we're not in freelancer mode
+      if (!isFreelancerMode && user.user_type !== UserType.FREELANCER) {
+        setIsLoading(true);
 
-      // The backend will automatically generate an AI response
-      // Wait a moment, then fetch the updated chat to get the AI response
-      setTimeout(async () => {
-        try {
-          const updatedChat = await chatApi.getChat(currentChat.id);
-          
-          if (updatedChat && updatedChat.messages) {
-            // Find messages that we don't already have (the AI response)
-            const existingMessageIds = messages.map(m => m.id);
-            const newMessages: Message[] = updatedChat.messages
-              .filter(m => {
-                const messageId = m.message_id || `${m.user_id}-${m.created_at}`;
-                return !existingMessageIds.includes(messageId) && m.sent_from === MessageSender.AI;
-              })
-              .map(m => ({
-                id: m.message_id || `${m.user_id}-${m.created_at}`,
-                text: m.text || "",
-                sender: m.sent_from as MessageSender,
-                timestamp: new Date(m.created_at),
-                status: 'sent',
-                docLink: m.doc_link,
-                docType: m.type === 'document' ? 'document' : undefined,
-              }));
+        // The backend will automatically generate an AI response
+        // Wait a moment, then fetch the updated chat to get the AI response
+        setTimeout(async () => {
+          try {
+            const updatedChat = await chatApi.getChat(currentChat.id);
             
-            if (newMessages.length > 0) {
-              // Check if any AI message has text "freelancer"
-              const hasFreelancerMessage = newMessages.some(msg => msg.text.trim().toLowerCase() === "freelancer");
+            if (updatedChat && updatedChat.messages) {
+              // Find messages that we don't already have (the AI response)
+              const existingMessageIds = messages.map(m => m.id);
+              const newMessages: Message[] = updatedChat.messages
+                .filter(m => {
+                  const messageId = m.message_id || `${m.user_id}-${m.created_at}`;
+                  return !existingMessageIds.includes(messageId) && m.sent_from === MessageSender.AI;
+                })
+                .map(m => ({
+                  id: m.message_id || `${m.user_id}-${m.created_at}`,
+                  text: m.text || "",
+                  sender: m.sent_from as MessageSender,
+                  timestamp: new Date(m.created_at),
+                  status: 'sent',
+                  docLink: m.doc_link,
+                  docType: m.type === 'document' ? 'document' : undefined,
+                  freelancerId: m.freelancer_id
+                }));
               
-              if (hasFreelancerMessage) {
-                // Redirect to FreelancerScreen
-                router.push('/screens/FreelancerScreen');
-                setIsLoading(false);
-                return;
+              if (newMessages.length > 0) {
+                // Check if any AI message has text "freelancer"
+                const hasFreelancerMessage = newMessages.some(msg => msg.text.trim().toLowerCase() === "freelancer");
+                
+                if (hasFreelancerMessage) {
+                  // Redirect to FreelancerScreen
+                  router.push('/screens/FreelancerScreen');
+                  setIsLoading(false);
+                  return;
+                }
+                
+                // Add AI messages to the chat
+                setMessages(prev => [...prev, ...newMessages]);
+                
+                // Update current chat with latest message
+                const lastMessage = newMessages[newMessages.length - 1];
+                const updatedCurrentChat = {
+                  ...currentChat,
+                  lastMessage: lastMessage.text,
+                  timestamp: lastMessage.timestamp,
+                  messages: [...currentChat.messages, newMsg, ...newMessages]
+                };
+                
+                setCurrentChat(updatedCurrentChat);
+                
+                // Update the chats list
+                setChats(prev =>
+                  prev.map(chat => chat.id === currentChat.id ? updatedCurrentChat : chat)
+                );
               }
-              
-              // Add AI messages to the chat
-              setMessages(prev => [...prev, ...newMessages]);
-              
-              // Update current chat with latest message
-              const lastMessage = newMessages[newMessages.length - 1];
-              const updatedCurrentChat = {
-                ...currentChat,
-                lastMessage: lastMessage.text,
-                timestamp: lastMessage.timestamp,
-                messages: [...currentChat.messages, newMsg, ...newMessages]
-              };
-              
-              setCurrentChat(updatedCurrentChat);
-              
-              // Update the chats list
-              setChats(prev =>
-                prev.map(chat => chat.id === currentChat.id ? updatedCurrentChat : chat)
-              );
             }
+          } catch (error) {
+            console.error("Error fetching updated chat:", error);
+          } finally {
+            setIsLoading(false);
           }
-        } catch (error) {
-          console.error("Error fetching updated chat:", error);
-        } finally {
-          setIsLoading(false);
-        }
-      }, 2000); // Wait 2 seconds for the backend to process and generate a response
-      
+        }, 2000); // Wait 2 seconds for the backend to process and generate a response
+      } else {
+        // For freelancer mode, just update the chat without waiting for AI
+        const updatedCurrentChat = {
+          ...currentChat,
+          lastMessage: newMsg.text,
+          timestamp: new Date(),
+          messages: [...currentChat.messages, newMsg]
+        };
+        
+        setCurrentChat(updatedCurrentChat);
+        
+        // Update the chats list
+        setChats(prev =>
+          prev.map(chat => chat.id === currentChat.id ? updatedCurrentChat : chat)
+        );
+        
+        // Poll for new messages for a short while to see if we get a response
+        setTimeout(async () => {
+          try {
+            const updatedChat = await chatApi.getChat(currentChat.id);
+            if (updatedChat && updatedChat.messages) {
+              // Find messages that we don't already have
+              const existingMessageIds = messages.map(m => m.id).concat([tempMessageId]);
+              const newMessages: Message[] = updatedChat.messages
+                .filter(m => {
+                  const messageId = m.message_id || `${m.user_id}-${m.created_at}`;
+                  return !existingMessageIds.includes(messageId);
+                })
+                .map(m => ({
+                  id: m.message_id || `${m.user_id}-${m.created_at}`,
+                  text: m.text || "",
+                  sender: m.sent_from as MessageSender,
+                  timestamp: new Date(m.created_at),
+                  status: 'sent',
+                  docLink: m.doc_link,
+                  docType: m.type === 'document' ? 'document' : undefined,
+                  freelancerId: m.freelancer_id
+                }));
+              
+              if (newMessages.length > 0) {
+                setMessages(prev => [...prev, ...newMessages]);
+                
+                const lastMessage = newMessages[newMessages.length - 1];
+                const updatedChatWithResponses = {
+                  ...currentChat,
+                  lastMessage: lastMessage.text,
+                  timestamp: lastMessage.timestamp,
+                  messages: [...currentChat.messages, newMsg, ...newMessages]
+                };
+                
+                setCurrentChat(updatedChatWithResponses);
+                setChats(prev =>
+                  prev.map(chat => chat.id === currentChat.id ? updatedChatWithResponses : chat)
+                );
+              }
+            }
+          } catch (error) {
+            console.error("Error polling for new messages:", error);
+          }
+        }, 1000);
+      }
     } catch (error) {
       console.error("Error sending message:", error);
       
@@ -394,6 +496,56 @@ const ChatScreen = () => {
     }
   };
 
+  // Poll for new messages specifically for the freelancer view
+  useEffect(() => {
+    if (!isFreelancerMode || !currentChat || !user || user.user_type !== UserType.FREELANCER) return;
+    
+    const pollForNewMessages = setInterval(async () => {
+      try {
+        const updatedChat = await chatApi.getChat(currentChat.id);
+        if (updatedChat && updatedChat.messages) {
+          const existingMessageIds = messages.map(m => m.id);
+          const newMessages: Message[] = updatedChat.messages
+            .filter(m => {
+              const messageId = m.message_id || `${m.user_id}-${m.created_at}`;
+              return !existingMessageIds.includes(messageId);
+            })
+            .map(m => ({
+              id: m.message_id || `${m.user_id}-${m.created_at}`,
+              text: m.text || "",
+              sender: m.sent_from as MessageSender,
+              timestamp: new Date(m.created_at),
+              status: 'sent',
+              docLink: m.doc_link,
+              docType: m.type === 'document' ? 'document' : undefined,
+              freelancerId: m.freelancer_id
+            }));
+          
+          if (newMessages.length > 0) {
+            setMessages(prev => [...prev, ...newMessages]);
+            
+            const lastMessage = newMessages[newMessages.length - 1];
+            const updatedCurrentChat = {
+              ...currentChat,
+              lastMessage: lastMessage.text,
+              timestamp: lastMessage.timestamp,
+              messages: [...messages, ...newMessages]
+            };
+            
+            setCurrentChat(updatedCurrentChat);
+            setChats(prev =>
+              prev.map(chat => chat.id === currentChat.id ? updatedCurrentChat : chat)
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Error polling for new messages:", error);
+      }
+    }, 5000); // Poll every 5 seconds
+    
+    return () => clearInterval(pollForNewMessages);
+  }, [isFreelancerMode, currentChat, messages, user]);
+
   const startNewChat = async () => {
     if (!user) return;
     
@@ -406,11 +558,14 @@ const ChatScreen = () => {
       if (newChat) {
         const formattedChat: Chat = {
           id: newChat.chat_id,
-          title: `Chat ${newChat.chat_id.substring(0, 8)}...`,
+          title: isFreelancerMode && customerInfo 
+            ? `Chat with ${customerInfo.name}` 
+            : `Chat ${newChat.chat_id.substring(0, 8)}...`,
           lastMessage: "New conversation started",
           timestamp: new Date(newChat.created_at),
           unreadCount: 0,
-          messages: []
+          messages: [],
+          userId: newChat.user_id
         };
         
         setChats(prev => [formattedChat, ...prev]);
@@ -738,6 +893,8 @@ const ChatScreen = () => {
     const getMessageStyle = () => {
       if (item.sender === MessageSender.USER) {
         return styles.userMessage;
+      } else if (item.sender === MessageSender.FREELANCER) {
+        return styles.freelancerMessage;
       }
       
       // Handle specific document types with different colors
@@ -779,9 +936,14 @@ const ChatScreen = () => {
           </View>
         )}
         
+        {/* Add sender label for freelancer messages */}
+        {item.sender === MessageSender.FREELANCER && !isFreelancerMode && (
+          <ThemedText style={styles.senderLabel}>Freelancer</ThemedText>
+        )}
+        
         <ThemedText style={[
           styles.messageText,
-          (item.sender === MessageSender.AI || docType) && { color: '#000000' }
+          (item.sender !== MessageSender.USER || docType) && { color: '#000000' }
         ]}>
           {item.text}
         </ThemedText>
@@ -801,12 +963,12 @@ const ChatScreen = () => {
         <View style={styles.messageFooter}>
           <ThemedText style={[
             styles.timestamp,
-            (item.sender === MessageSender.AI || docType) && { color: '#8E8E93' }
+            (item.sender !== MessageSender.USER || docType) && { color: '#8E8E93' }
           ]}>
             {item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </ThemedText>
           
-          {item.sender === MessageSender.USER && (
+          {(item.sender === MessageSender.USER || item.sender === MessageSender.FREELANCER) && (
             <View style={styles.statusContainer}>
               {item.status === 'sending' && <ActivityIndicator size="small" color="#FFFFFF" />}
               {item.status === 'sent' && <Ionicons name="checkmark-done" size={16} color={docType ? '#000000' : '#FFFFFF'} />}
@@ -831,15 +993,25 @@ const ChatScreen = () => {
     );
   };
 
+  // Helper function to detect if text contains Hindi characters
+  const containsHindi = (text: string): boolean => {
+    // Devanagari Unicode range: [\u0900-\u097F]
+    const hindiRegex = /[\u0900-\u097F]/;
+    return hindiRegex.test(text);
+  };
+
   const handleSpeech = (message: Message) => {
     if (currentlySpeakingId === message.id) {
       // If already speaking this message, stop speaking
       Speech.stop();
       setCurrentlySpeakingId(null);
     } else {
-      // Speak the message text
+      // Determine language based on text content
+      const language = containsHindi(message.text) ? 'hi-IN' : 'en-US';
+      
+      // Speak the message text with appropriate language
       Speech.speak(message.text, {
-        language: 'en-US',
+        language: language,
         onDone: () => setCurrentlySpeakingId(null),
         onError: () => setCurrentlySpeakingId(null),
       });
@@ -856,16 +1028,23 @@ const ChatScreen = () => {
         <TouchableOpacity onPress={toggleSidebar} style={styles.menuButton}>
           <IconSymbol name="line.3.horizontal" size={24} color="#000000" />
         </TouchableOpacity>
-        <ThemedText style={{ color: "#000000" }} type="subtitle">{currentChat?.title || "New Chat"}</ThemedText>
+        <ThemedText style={{ color: "#000000" }} type="subtitle">{getPageTitle()}</ThemedText>
         <View style={styles.headerRight}>
-          <TouchableOpacity onPress={navigateToLanguageSettings} style={styles.languageButton}>
-            <IconSymbol name="globe" size={22} color="#007AFF" />
-            {user?.preferred_language && (
-              <ThemedText style={styles.languageIndicator}>
-                {user.preferred_language.substring(0, 2).toUpperCase()}
-              </ThemedText>
-            )}
-          </TouchableOpacity>
+          {!isFreelancerMode && (
+            <TouchableOpacity onPress={navigateToLanguageSettings} style={styles.languageButton}>
+              <IconSymbol name="globe" size={22} color="#007AFF" />
+              {user?.preferred_language && (
+                <ThemedText style={styles.languageIndicator}>
+                  {user.preferred_language.substring(0, 2).toUpperCase()}
+                </ThemedText>
+              )}
+            </TouchableOpacity>
+          )}
+          {isFreelancerMode && user?.user_type === UserType.FREELANCER && (
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <IconSymbol name="arrow.left" size={22} color="#007AFF" />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={deleteCurrentChat} style={styles.deleteButton}>
             <IconSymbol name="trash" size={22} color="#F44336" />
           </TouchableOpacity>
@@ -914,7 +1093,7 @@ const ChatScreen = () => {
           style={styles.input}
           value={newMessage}
           onChangeText={handleTextChange}
-          placeholder="Type a message..."
+          placeholder={isFreelancerMode ? "Reply to customer..." : "Type a message..."}
           placeholderTextColor="#8E8E93"
           multiline
         />
@@ -1015,6 +1194,10 @@ const styles = StyleSheet.create({
   menuButton: {
     padding: 8,
   },
+  backButton: {
+    padding: 8,
+    marginRight: 8,
+  },
   deleteButton: {
     padding: 8,
   },
@@ -1059,6 +1242,17 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: '#F2F2F7',
     borderBottomLeftRadius: 4,
+  },
+  freelancerMessage: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#4CD964', // Green color for freelancer messages
+    borderBottomLeftRadius: 4,
+  },
+  senderLabel: {
+    fontSize: 10,
+    marginBottom: 4,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   documentMessage: {
     alignSelf: 'flex-start',
@@ -1288,14 +1482,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textDecorationLine: 'underline',
     color: '#007AFF',
-  },
-  speechButton: {
-    marginLeft: 8,
-    padding: 4,
-  },
-  attachButton: {
-    marginRight: 8,
-    padding: 4,
   },
   imageContainer: {
     width: '100%',

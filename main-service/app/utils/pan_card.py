@@ -7,6 +7,9 @@ def make_pan_card(
     name: str,
     father_name: str,
     dob: str,
+    email: str,
+    phone: str,
+    gender: str,
     address: str,
     city: str,
     state: str,
@@ -64,12 +67,12 @@ def make_pan_card(
         # Email (dummy value for now)
         email_input = driver.find_element("xpath", '//*[@id="email_id2"]')
         email_input.clear()
-        email_input.send_keys("test@example.com")
+        email_input.send_keys(email)
 
         # Phone (dummy value for now)
         phone_input = driver.find_element("xpath", '//*[@id="rvContactNo"]')
         phone_input.clear()
-        phone_input.send_keys("9999999999")
+        phone_input.send_keys(phone)
 
         print("Form fields filled with provided details.")
     except Exception as e:

@@ -168,6 +168,41 @@ const FreelancerScreen = () => {
     }
   };
   
+  const handleChatPress = async (freelancer: Freelancer) => {
+    try {
+      if (!user) {
+        Alert.alert('Error', 'You must be logged in to chat with a freelancer');
+        return;
+      }
+      
+      // Create a chat for this interaction
+      let chatId: string;
+      try {
+        const response = await chatApi.createChat(user.id);
+        chatId = response.chat_id;
+      } catch (error) {
+        console.error('Error creating chat:', error);
+        Alert.alert('Error', 'Failed to start chat. Please try again.');
+        return;
+      }
+      
+      // Navigate to the chat screen with appropriate parameters
+      router.push({
+        pathname: '/screens/ChatScreen',
+        params: { 
+          chatId: chatId,
+          isFreelancerMode: 'false',
+          freelancerId: freelancer.id.toString()
+        }
+      });
+      
+    } catch (error) {
+      console.error('Error starting chat with freelancer:', error);
+      Alert.alert('Error', 'Failed to start chat. Please try again.');
+    }
+  };
+
+  
   const renderFreelancerItem = ({ item }: { item: Freelancer }) => {
     // Check if freelancer language matches user's preferred language
     const isPreferredLanguage = user?.preferred_language === item.preferred_language;
@@ -187,26 +222,36 @@ const FreelancerScreen = () => {
             </ThemedText>
           </View>
         </View>
-        <TouchableOpacity 
-          style={[
-            styles.callButton,
-            isCalling && styles.callingButton
-          ]}
-          onPress={() => handleCallPress(item)}
-          disabled={isCalling || callingFreelancerId !== null}
-        >
-          {isCalling ? (
-            <>
-              <ActivityIndicator size="small" color="#FFFFFF" />
-              <ThemedText style={styles.callButtonText}>Calling...</ThemedText>
-            </>
-          ) : (
-            <>
-              <Ionicons name="call" size={20} color="#FFFFFF" />
-              <ThemedText style={styles.callButtonText}>Call</ThemedText>
-            </>
-          )}
-        </TouchableOpacity>
+        <View style={styles.actionButtons}>
+          <TouchableOpacity 
+            style={styles.chatButton}
+            onPress={() => handleChatPress(item)}
+          >
+            <Ionicons name="chatbubble" size={20} color="#FFFFFF" />
+            <ThemedText style={styles.buttonText}>Chat</ThemedText>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[
+              styles.callButton,
+              isCalling && styles.callingButton
+            ]}
+            onPress={() => handleCallPress(item)}
+            disabled={isCalling || callingFreelancerId !== null}
+          >
+            {isCalling ? (
+              <>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ThemedText style={styles.callButtonText}>Calling...</ThemedText>
+              </>
+            ) : (
+              <>
+                <Ionicons name="call" size={20} color="#FFFFFF" />
+                <ThemedText style={styles.callButtonText}>Call</ThemedText>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
     );
   };
@@ -395,10 +440,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#007AFF',
   },
+  actionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  chatButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#007AFF', // Blue color for chat
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    marginRight: 8,
+  },
   callButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#4CD964',
+    backgroundColor: '#4CD964', // Green color for call
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 20,
@@ -408,6 +466,11 @@ const styles = StyleSheet.create({
     minWidth: 110, // Ensure consistent width for button when showing spinner
   },
   callButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  buttonText: {
     color: '#FFFFFF',
     fontWeight: '600',
     marginLeft: 4,

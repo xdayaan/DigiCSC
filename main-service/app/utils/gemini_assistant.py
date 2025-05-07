@@ -371,6 +371,18 @@ class GeminiAssistant:
         """
         print(f"CONTINUING DOCUMENT FLOW - Current field: {state.current_field.value if state.current_field else 'None'}")
         
+        # First check if the user is asking for a freelancer
+        try:
+            is_freelancer_request = await self._is_freelancer_request("", latest_message)
+            if is_freelancer_request:
+                print("FREELANCER REQUEST DETECTED DURING DOCUMENT FLOW - STOPPING PROCESS")
+                # Reset the state before exiting
+                state.reset()
+                return "freelancer", True
+        except Exception as e:
+            print(f"Error checking for freelancer request: {str(e)}")
+            # Continue with document flow if there's an error in the check
+            
         # Check if we're waiting for confirmation
         if state.current_field == DocumentField.CONFIRMATION:
             confirmation_keywords = ["yes", "confirm", "proceed", "go ahead", "create", "make", "generate", "okay", "ok"]
@@ -615,6 +627,11 @@ class GeminiAssistant:
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
     async def _generate_ai_response(self, chat_history: str, latest_message: str, language: str) -> str:
         """Generate an AI response to a user message."""
+        # Handle Kumaoni/Garhwali by instructing to use Devanagari script
+        script_instruction = ""
+        if language.lower() in ["kumaoni", "garhwali", "gharwali", "hindi", "hi"]:
+            script_instruction = "IMPORTANT: Write your response using Hindi/Devanagari script only"
+            
         prompt = f"""
         You are a helpful customer support assistant for a Digital Common Service Center. 
         Respond to the following chat conversation.
@@ -627,6 +644,7 @@ class GeminiAssistant:
         {latest_message}
         
         Respond in this language: {language}
+        {script_instruction}
         
         IMPORTANT: If the user is asking for a freelancer, respond ONLY with the word 'freelancer'.
         """
