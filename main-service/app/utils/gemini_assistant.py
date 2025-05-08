@@ -163,9 +163,106 @@ class GeminiAssistant:
             "api development"
         ]
         
+        # Common greeting terms in multiple languages
+        self.greeting_terms = [
+            # English
+            "hello", "hi", "hey", "good morning", "good afternoon", "good evening", "greetings", "welcome", "namaste", "namastey", "",
+            # Hindi
+            "नमस्ते", "नमस्कार", "प्रणाम", "सुप्रभात", "शुभ दिन",
+            # Spanish
+            "hola", "buenos días", "buenas tardes", "buenas noches",
+            # French
+            "bonjour", "salut", "bonsoir",
+            # German
+            "hallo", "guten tag", "guten morgen",
+            # Italian
+            "ciao", "buongiorno", "salve",
+            # Portuguese
+            "olá", "bom dia", "boa tarde",
+            # Russian
+            "привет", "здравствуйте", "добрый день",
+            # Japanese
+            "こんにちは", "おはよう", "こんばんは",
+            # Chinese
+            "你好", "早上好", "晚上好",
+            # Arabic
+            "مرحبا", "السلام عليكم", "صباح الخير",
+            # Kumaoni/Garhwali and other Indian languages
+            "राम राम", "जय हो", "सत श्री अकाल", "वणक्कम्", "अदाब", "नमो नमः"
+        ]
+        
         # State management for document creation conversations
         self.conversation_states = {}
     
+    def _is_simple_greeting(self, message: str) -> bool:
+        """
+        Detect if a message is a simple greeting in any language.
+        
+        Args:
+            message: The message to check
+            
+        Returns:
+            True if the message appears to be a simple greeting, False otherwise
+        """
+        # Convert to lowercase for case-insensitive matching
+        message_lower = message.lower().strip()
+        
+        # Check if the message contains only a greeting
+        # First check if it's a very short message (likely just a greeting)
+        if len(message_lower.split()) <= 3:
+            # Then check if it contains any common greeting terms
+            for greeting in self.greeting_terms:
+                # Only check if greeting is in message (not the reverse)
+                # Check with word boundaries to avoid false positives (like "hi" in "bhimtal")
+                if greeting == message_lower or f" {greeting} " in f" {message_lower} ":
+                    print(f"GREETING DETECTED: '{message_lower}' matches '{greeting}'")
+                    return True
+                    
+        return False
+        
+    def _detect_greeting_language(self, message: str) -> str:
+        """
+        Detect the language of a greeting.
+        
+        Args:
+            message: The greeting message to check
+            
+        Returns:
+            The detected language code ("hi" for Hindi, "en" for English, etc.)
+        """
+        # Convert to lowercase for case-insensitive matching
+        message_lower = message.lower().strip()
+        
+        # Define language-specific greeting patterns
+        hindi_greetings = ["नमस्ते", "नमस्कार", "प्रणाम", "सुप्रभात", "शुभ दिन", "राम राम", "जय हो", 
+                          "सत श्री अकाल", "नमो नमः", "namaste", "namaskar", "namastey", 
+                          "namaskaar", "pranaam", "ram ram"]
+        
+        kumaoni_greetings = ["जय बो"]
+        
+        garhwali_greetings = ["जय भगवान", "जय बदरी विशाल"]
+        
+        # Check for Hindi greetings
+        for greeting in hindi_greetings:
+            if greeting == message_lower or greeting in message_lower:
+                print(f"HINDI GREETING DETECTED: '{message_lower}'")
+                return "hindi"
+                
+        # Check for Kumaoni greetings
+        for greeting in kumaoni_greetings:
+            if greeting == message_lower or greeting in message_lower:
+                print(f"KUMAONI GREETING DETECTED: '{message_lower}'")
+                return "kumaoni"
+                
+        # Check for Garhwali greetings
+        for greeting in garhwali_greetings:
+            if greeting == message_lower or greeting in message_lower:
+                print(f"GARHWALI GREETING DETECTED: '{message_lower}'")
+                return "gharwali"
+        
+        # Default to English
+        return "en"
+        
     def _get_or_create_conversation_state(self, user_id: int) -> ConversationState:
         """Get or create a conversation state for a user."""
         if USE_REDIS:
@@ -240,9 +337,56 @@ class GeminiAssistant:
         if not latest_message:
             return "I didn't receive your message. Could you please try again?", None
             
+        # Check if the message is a greeting in a specific language and update language if needed
+        if self._is_simple_greeting(latest_message):
+            detected_language = self._detect_greeting_language(latest_message)
+            if detected_language != "en":
+                print(f"DETECTED GREETING LANGUAGE: {detected_language}")
+                language = detected_language
+        
         # Get conversation state for this user
         state = self._get_or_create_conversation_state(user_id)
         
+        # Check if this is a simple greeting - if so, reset any ongoing process
+        if self._is_simple_greeting(latest_message):
+            print("GREETING DETECTED! CLEARING CONVERSATION STATE AND REDIS")
+            
+            # Reset the conversation state
+            state.reset()
+            
+            # Clear Redis if it's in use
+            if USE_REDIS:
+                try:
+                    # Clear only this user's data
+                    redis_client.delete(f"{REDIS_PREFIX}{user_id}")
+                    print(f"Cleared Redis state for user {user_id}")
+                except Exception as e:
+                    print(f"Error clearing Redis state: {e}")
+            
+            # Respond with a friendly greeting in the appropriate language
+            greeting_responses = {
+                "en": "Hello! How can I assist you today?",
+                "hindi": "नमस्ते! आज मैं आपकी कैसे सहायता कर सकता हूँ?",
+                "kumaoni": "नमस्कार! मी आज तमारी कैसे मदद करूँ?",
+                "gharwali": "नमस्कार! में आज आपकी किया मदद कर सकूँ?",
+                "garhwali": "नमस्कार! में आज आपकी किया मदद कर सकूँ?",
+                "es": "¡Hola! ¿Cómo puedo ayudarte hoy?",
+                "fr": "Bonjour! Comment puis-je vous aider aujourd'hui?",
+                "de": "Hallo! Wie kann ich Ihnen heute helfen?",
+                "it": "Ciao! Come posso aiutarti oggi?",
+                "pt": "Olá! Como posso ajudá-lo hoje?",
+                "ru": "Привет! Чем я могу вам помочь сегодня?",
+                "ja": "こんにちは！今日はどのようにお手伝いできますか？",
+                "zh": "你好！今天我能帮您什么忙？",
+                "ar": "مرحبًا! كيف يمكنني مساعدتك اليوم؟"
+            }
+            
+            response = greeting_responses.get(language, greeting_responses["en"])
+            
+            # Save the reset conversation state
+            self._save_conversation_state(user_id, state)
+            return response, None
+            
         # Debug the current state
         print(f"CURRENT STATE: Document Type: {state.document_type.value}, Current Field: {state.current_field.value if state.current_field else 'None'}")
         print(f"STORED DETAILS: {state.details}")
@@ -545,25 +689,43 @@ class GeminiAssistant:
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
     async def _is_freelancer_request(self, chat_history: str, latest_message: str) -> bool:
         """Determine if the user is requesting a freelancer."""
+        # First, check if the message is likely just an email address or other personal info
+        # Simple regex to detect email format
+        import re
+        email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+        if re.match(email_pattern, latest_message.strip()):
+            print("Email address detected, not a freelancer request")
+            return False
+            
+        # Skip freelancer check for very short inputs that are likely field values
+        if len(latest_message.strip()) < 30 and len(latest_message.split()) <= 3:
+            print("Short input detected, skipping freelancer check")
+            return False
+
         prompt = f"""
-        Analyze this chat conversation and determine if the user is asking to connect with a freelancer or needs services that would require a freelancer.
+        Analyze this message and determine ONLY if the user is EXPLICITLY requesting to connect with a freelancer 
+        or CLEARLY needs specialized services that would require a freelancer.
 
-        Chat history:
-        {chat_history}
+        Message to analyze:
+        "{latest_message}"
 
-        Latest user message:
-        {latest_message}
-
-        Freelancer services include:
+        Freelancer services include ONLY:
         {', '.join(self.freelancer_tasks)}
 
-        If the user is asking for a freelancer or any of these services DIRECTLY or INDIRECTLY, respond ONLY with the word 'YES'.
-        If not, respond ONLY with the word 'NO'.
+        IMPORTANT RULES:
+        1. If the message is ONLY an email address, phone number, name, or other personal information, respond with 'NO'.
+        2. If the message does NOT explicitly mention needing a freelancer or any of the listed services, respond with 'NO'.
+        3. If the message is a simple greeting or casual conversation, respond with 'NO'.
+        4. ONLY respond with 'YES' if the user is clearly asking for a freelancer or explicitly mentioning needing the services listed above.
+        5. DO NOT interpret general technical terms or personal information as freelancer requests.
+
+        Respond ONLY with the word 'YES' or 'NO'.
         """
 
         try:
             response = await self.model.generate_content_async(prompt)
             result = response.text.strip().upper()
+            print(f"Freelancer detection result: {result} for input: {latest_message[:30]}...")
             return result == "YES"
         except Exception as e:
             print(f"Error in freelancer detection: {e}")
@@ -627,10 +789,31 @@ class GeminiAssistant:
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
     async def _generate_ai_response(self, chat_history: str, latest_message: str, language: str) -> str:
         """Generate an AI response to a user message."""
-        # Handle Kumaoni/Garhwali by instructing to use Devanagari script
+        # Handle Kumaoni/Garhwali/Hindi by instructing to use Devanagari script
         script_instruction = ""
-        if language.lower() in ["kumaoni", "garhwali", "gharwali", "hindi", "hi"]:
-            script_instruction = "IMPORTANT: Write your response using Hindi/Devanagari script only"
+        language_instruction = ""
+        
+        # Normalize language value
+        language = language.lower()
+        
+        # Special handling for Hindi, Kumaoni and Gharwali
+        if language in ["kumaoni", "garhwali", "gharwali", "hindi", "hi"]:
+            # For Kumaoni/Garhwali, specify to use Devanagari script
+            if language in ["kumaoni", "garhwali", "gharwali"]:
+                script_instruction = "IMPORTANT: Write your response using Hindi/Devanagari script. The language should be " + language.capitalize() + "."
+                language_instruction = f"""
+                You MUST respond in {language.capitalize()} language only.
+                Even if the user writes in English or another language, your response should be in {language.capitalize()}.
+                This is extremely important for user satisfaction.
+                """
+            # For Hindi
+            elif language in ["hindi", "hi"]:
+                script_instruction = "IMPORTANT: Write your response using Hindi/Devanagari script."
+                language_instruction = """
+                You MUST respond in Hindi language only.
+                Even if the user writes in English or another language, your response should be in Hindi.
+                This is extremely important for user satisfaction.
+                """
             
         prompt = f"""
         You are a helpful customer support assistant for a Digital Common Service Center. 
@@ -643,10 +826,13 @@ class GeminiAssistant:
         Latest user message:
         {latest_message}
         
+        {language_instruction}
         Respond in this language: {language}
         {script_instruction}
         
-        IMPORTANT: If the user is asking for a freelancer, respond ONLY with the word 'freelancer'.
+        IMPORTANT: If the user is EXPLICITLY asking for a freelancer or for services like website development, 
+        custom application development, logo design, API development etc., respond ONLY with the word 'freelancer'.
+        DO NOT interpret email addresses or other personal information as freelancer requests.
         """
         
         try:
@@ -660,4 +846,12 @@ class GeminiAssistant:
             return result
         except Exception as e:
             print(f"Error generating AI response: {e}")
-            raise
+            # Provide error messages in the appropriate language
+            if language in ["hindi", "hi"]:
+                return "माफ़ कीजिए, मुझे आपके अनुरोध को संसाधित करने में समस्या हो रही है। कृपया फिर से प्रयास करें या सहायता के लिए संपर्क करें।"
+            elif language == "kumaoni":
+                return "माफी चाहन्छु, मलाई तपाईंको अनुरोध प्रशोधन गर्न समस्या भइरहेको छ। कृपया फेरि प्रयास गर्नुहोस् वा सहयोगको लागि सम्पर्क गर्नुहोस्।"
+            elif language in ["garhwali", "gharwali"]:
+                return "माफ करा, मी आपल्या विनंतीवर प्रक्रिया करण्यात अडचण येत आहे. कृपया पुन्हा प्रयत्न करा किंवा मदतीसाठी संपर्क साधा."
+            else:
+                raise
