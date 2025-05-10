@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Query
 from app.utils.token_generator import generate_agora_token
-from fastapi import WebSocket, APIRouter
 import uuid  # Importing uuid to generate unique room names
 
 router = APIRouter()  # Changed from FastAPI to APIRouter

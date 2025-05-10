@@ -9,7 +9,6 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '../services/AuthContext';
 import { IconSymbol } from '@/components/ui/IconSymbol';
-import webSocketService, { CallResponse } from '../services/WebSocketService';
 import { chatApi } from '../services/api';
 
 // Define freelancer interface based on API response
@@ -31,49 +30,6 @@ const FreelancerScreen = () => {
   const [freelancers, setFreelancers] = useState<Freelancer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [callingFreelancerId, setCallingFreelancerId] = useState<number | null>(null);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  
-  // Connect to WebSocket when component mounts
-  useEffect(() => {
-    const connectWebSocket = async () => {
-      try {
-        await webSocketService.connect();
-      } catch (error) {
-        console.error('Failed to connect to WebSocket:', error);
-      }
-    };
-    
-    connectWebSocket();
-    
-    // Listen for call responses from freelancers
-    const unsubscribe = webSocketService.onCallResponse((response: CallResponse) => {
-      if (callingFreelancerId === response.freelancerId) {
-        if (response.response === 'accept') {
-          // Freelancer accepted the call, navigate to chat
-          router.push({
-            pathname: '/screens/ChatScreen',
-            params: { chatId: activeChatId }
-          });
-        } else {
-          // Freelancer rejected the call
-          Alert.alert(
-            'Call Rejected',
-            'The freelancer is currently unavailable. Please try again later or select another freelancer.',
-            [{ text: 'OK' }]
-          );
-        }
-        // Reset calling state
-        setCallingFreelancerId(null);
-        setActiveChatId(null);
-      }
-    });
-    
-    // Clean up WebSocket when component unmounts
-    return () => {
-      unsubscribe();
-    };
-  }, [router, callingFreelancerId, activeChatId]);
   
   // Fetch freelancers from API
   useEffect(() => {
@@ -114,60 +70,6 @@ const FreelancerScreen = () => {
     });
   };
 
-  const handleCallPress = async (freelancer: Freelancer) => {
-    try {
-      if (!user) {
-        Alert.alert('Error', 'You must be logged in to call a freelancer');
-        return;
-      }
-      
-      setCallingFreelancerId(freelancer.id);
-      
-      // Create or get existing chat for this interaction
-      let chatId: string;
-      try {
-        const response = await chatApi.createChat(user.id);
-        chatId = response.chat_id;
-      } catch (error) {
-        console.error('Error creating chat:', error);
-        Alert.alert('Error', 'Failed to initiate call. Please try again.');
-        setCallingFreelancerId(null);
-        return;
-      }
-      
-      setActiveChatId(chatId);
-      
-      // Show calling modal
-      Alert.alert(
-        `Calling ${freelancer.name}`,
-        'Please wait while we connect you...',
-        [
-          { 
-            text: 'Cancel', 
-            onPress: () => {
-              setCallingFreelancerId(null);
-              setActiveChatId(null);
-            }
-          }
-        ]
-      );
-      
-      // Initiate call via WebSocket
-      const success = webSocketService.initiateCall(freelancer.id, chatId);
-      
-      if (!success) {
-        Alert.alert('Connection Error', 'Failed to initiate call. Please check your connection and try again.');
-        setCallingFreelancerId(null);
-        setActiveChatId(null);
-      }
-    } catch (error) {
-      console.error('Error calling freelancer:', error);
-      Alert.alert('Error', 'Failed to initiate call. Please try again.');
-      setCallingFreelancerId(null);
-      setActiveChatId(null);
-    }
-  };
-  
   const handleChatPress = async (freelancer: Freelancer) => {
     try {
       if (!user) {
@@ -206,7 +108,6 @@ const FreelancerScreen = () => {
   const renderFreelancerItem = ({ item }: { item: Freelancer }) => {
     // Check if freelancer language matches user's preferred language
     const isPreferredLanguage = user?.preferred_language === item.preferred_language;
-    const isCalling = callingFreelancerId === item.id;
     
     return (
       <View style={[
@@ -216,7 +117,7 @@ const FreelancerScreen = () => {
         <View style={styles.freelancerInfo}>
           <ThemedText style={styles.freelancerName}>{item.name}</ThemedText>
           <View style={styles.languageTag}>
-            <IconSymbol name="globe" size={14} color="#007AFF" />
+            <Ionicons name="globe-outline" size={14} color="#007AFF" />
             <ThemedText style={styles.languageText}>
               {item.preferred_language.charAt(0).toUpperCase() + item.preferred_language.slice(1)}
             </ThemedText>
@@ -230,27 +131,6 @@ const FreelancerScreen = () => {
             <Ionicons name="chatbubble" size={20} color="#FFFFFF" />
             <ThemedText style={styles.buttonText}>Chat</ThemedText>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[
-              styles.callButton,
-              isCalling && styles.callingButton
-            ]}
-            onPress={() => handleCallPress(item)}
-            disabled={isCalling || callingFreelancerId !== null}
-          >
-            {isCalling ? (
-              <>
-                <ActivityIndicator size="small" color="#FFFFFF" />
-                <ThemedText style={styles.callButtonText}>Calling...</ThemedText>
-              </>
-            ) : (
-              <>
-                <Ionicons name="call" size={20} color="#FFFFFF" />
-                <ThemedText style={styles.callButtonText}>Call</ThemedText>
-              </>
-            )}
-          </TouchableOpacity>
         </View>
       </View>
     );
@@ -263,7 +143,7 @@ const FreelancerScreen = () => {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <IconSymbol name="arrow.left" size={24} color="#000000" />
+          <Ionicons name="arrow-back" size={24} color="#000000" />
         </TouchableOpacity>
         <ThemedText style={styles.headerTitle} type="subtitle">Available Freelancers</ThemedText>
         <View style={styles.headerRight} />
@@ -277,7 +157,7 @@ const FreelancerScreen = () => {
         </View>
       ) : error ? (
         <View style={styles.errorContainer}>
-          <IconSymbol name="exclamationmark.triangle" size={48} color="#FF3B30" />
+          <Ionicons name="warning" size={48} color="#FF3B30" />
           <ThemedText style={styles.errorText}>{error}</ThemedText>
           <TouchableOpacity 
             style={styles.retryButton}
@@ -306,7 +186,7 @@ const FreelancerScreen = () => {
         </View>
       ) : freelancers.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <IconSymbol name="person.2.slash" size={48} color="#8E8E93" />
+          <Ionicons name="people" size={48} color="#8E8E93" />
           <ThemedText style={styles.emptyText}>No freelancers available at the moment</ThemedText>
         </View>
       ) : (
@@ -322,7 +202,7 @@ const FreelancerScreen = () => {
       {/* Language preference hint */}
       {freelancers.length > 0 && (
         <View style={styles.hint}>
-          <IconSymbol name="info.circle" size={16} color="#007AFF" />
+          <Ionicons name="information-circle" size={16} color="#007AFF" />
           <ThemedText style={styles.hintText}>
             Freelancers who speak {user?.preferred_language || 'your preferred language'} are highlighted
           </ThemedText>
@@ -452,23 +332,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: 20,
     marginRight: 8,
-  },
-  callButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#4CD964', // Green color for call
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-  },
-  callingButton: {
-    backgroundColor: '#FF9500', // Orange color while calling
-    minWidth: 110, // Ensure consistent width for button when showing spinner
-  },
-  callButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    marginLeft: 4,
   },
   buttonText: {
     color: '#FFFFFF',

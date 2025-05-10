@@ -2,8 +2,7 @@ import React, { createContext, useState, useContext, useEffect, ReactNode } from
 import secureStorage from '../utils/secureStorage';
 import { userApi, ApiUser } from './api';
 import { User, UserType, Language } from './types';
-import webSocketService from './WebSocketService';
-import { handleIncomingCall, setupNotificationListeners } from '../utils/navigationUtils';
+import { setupNotificationListeners } from '../utils/navigationUtils';
 
 // Define the context type
 interface AuthContextType {
@@ -57,10 +56,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (userJson) {
           const userData = JSON.parse(userJson);
           setUser(userData);
-          
-          // Connect to WebSocket when user is loaded on startup
-          await webSocketService.connect();
-          webSocketService.updateUserId(userData.id);
         }
       } catch (error) {
         console.error('Error loading user data:', error);
@@ -74,26 +69,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Set up notification listeners for the app
     const unsubscribeNotifications = setupNotificationListeners();
     
-    // Cleanup WebSocket connection and notification listeners when the app is closed/unmounted
+    // Cleanup notification listeners when the app is closed/unmounted
     return () => {
-      webSocketService.disconnect();
       unsubscribeNotifications();
     };
   }, []);
-  
-  // Set up call notification handler for freelancer users
-  useEffect(() => {
-    if (user && user.user_type === UserType.FREELANCER) {
-      const unsubscribe = webSocketService.onCall(async (notification) => {
-        // Use the navigation utility to handle the incoming call
-        await handleIncomingCall(notification);
-      });
-      
-      return () => {
-        unsubscribe();
-      };
-    }
-  }, [user]);
 
   // Login function
   const login = async (userData: User) => {
@@ -102,10 +82,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Store the user data in secure storage
       await secureStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
-      
-      // Connect to WebSocket and register the user
-      await webSocketService.connect();
-      webSocketService.updateUserId(userData.id);
     } catch (error) {
       console.error('Login error:', error);
       throw error;
@@ -118,9 +94,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const logout = async () => {
     setIsLoading(true);
     try {
-      // Disconnect from WebSocket
-      webSocketService.disconnect();
-      
       // Remove user data from secure storage
       await secureStorage.deleteItem('user');
       setUser(null);

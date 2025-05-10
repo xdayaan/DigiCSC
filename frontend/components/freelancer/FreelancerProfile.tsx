@@ -3,12 +3,12 @@ import { StyleSheet, View, Text, TouchableOpacity, Switch, Alert } from 'react-n
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Animated, { FadeIn } from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { IconSymbol } from '@/components/ui/IconSymbol';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import useWebSocket from '@/hooks/useWebSocket'; // Import the WebSocket hook
 
 interface FreelancerProfileProps {
   freelancer: {
@@ -24,14 +24,9 @@ interface FreelancerProfileProps {
 const FreelancerProfile: React.FC<FreelancerProfileProps> = ({ 
   freelancer, 
   onStatusChange 
-}) => {
-  const colorScheme = useColorScheme();
+}) => {  const colorScheme = useColorScheme();
   const router = useRouter();
   const [isAvailable, setIsAvailable] = useState(true);
-
-  // Initialize WebSocket connection
-  const userId = 1; // Replace with the actual logged-in user ID
-  useWebSocket(userId);
 
   const handleAvailabilityToggle = (value: boolean) => {
     setIsAvailable(value);
@@ -40,38 +35,15 @@ const FreelancerProfile: React.FC<FreelancerProfileProps> = ({
       onStatusChange(value);
     }
   };
-
   const handleStartCall = async () => {
     try {
-      console.log('Start Call button clicked'); // Debug log
-
-      console.log('Sending API request to /startCall'); // Debug log
-      const response = await fetch('http://127.0.0.1:8000/api/v1/startCall', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          user1_id: userId, // Logged-in user ID
-          user2_id: freelancer.id, // Freelancer ID
-        }),
-      });
-
-      console.log('API response received'); // Debug log
-      const data = await response.json();
-      console.log('Response data:', data); // Debug log
-
-      if (response.ok) {
-        Alert.alert('Call Started', `Room: ${data.roomName}`);
-        console.log('Navigating to call screen'); // Debug log
-        router.push(`/call/${data.roomName}`);
-      } else {
-        Alert.alert('Error', `Failed to start call: ${data.detail}`);
-        console.error('API error:', data.detail); // Debug log
-      }
+      Alert.alert(
+        'Feature Unavailable',
+        'Call functionality has been temporarily removed.',
+        [{ text: 'OK' }]
+      );
     } catch (error) {
-      console.error('Error starting call:', error); // Debug log
-      Alert.alert('Error', 'An error occurred while starting the call.');
+      console.error('Error:', error);
     }
   };
 
@@ -133,16 +105,14 @@ const FreelancerProfile: React.FC<FreelancerProfileProps> = ({
             <ThemedText type="subtitle" style={styles.statNumber}>₹250</ThemedText>
             <ThemedText style={styles.statLabel}>Today</ThemedText>
           </View>
-        </View>
-
-        <TouchableOpacity
+        </View>        <TouchableOpacity
           style={[
             styles.button,
             { backgroundColor: colorScheme === 'dark' ? Colors.dark.tint : Colors.light.tint }
           ]}
           onPress={handleStartCall}
         >
-          <IconSymbol name="phone.fill" size={24} color="#ffffff" />
+          <Ionicons name="call" size={24} color="#ffffff" />
           <Text style={styles.buttonText}>Start Call</Text>
         </TouchableOpacity>
       </ThemedView>
