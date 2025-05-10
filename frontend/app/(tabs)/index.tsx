@@ -114,7 +114,7 @@ export default function HomeScreen() {
         </Animated.View>
         
         <View style={styles.footer}>
-          <Text style={styles.footerText}>© 2025 DigiCSC Services</Text>
+          <Text style={styles.footerText}>© 2025 All Rights Reserved By Mountain Minds</Text>
         </View>
       </View>
     </SafeAreaView>
@@ -139,10 +139,11 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   logoText: {
-    fontSize: 32,
-    fontWeight: '700',
+    fontSize: 50, // Larger size
+    fontWeight: '700', // Bold weight
     marginLeft: 10,
-    color: '#333',
+    color: '#0B1A54',
+    fontFamily: 'Roboto', // Custom font (make sure it's linked in your project)
   },
   subtitle: {
     fontSize: 16,
