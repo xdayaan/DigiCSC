@@ -55,6 +55,23 @@ KISAN_FIELDS = [
     {"name": "state", "prompt": "Please provide your State (e.g., UTTARAKHAND):"}
 ]
 
+# Define RTI fields we need to collect
+RTI_FIELDS = [
+    {"name": "public_authority", "prompt": "Please provide the Public Authority you want to file the RTI with:"},
+    {"name": "email", "prompt": "Please provide your Email Address:"},
+    {"name": "mobile_no", "prompt": "Please provide your Mobile Number:"},
+    {"name": "name", "prompt": "Please provide your Full Name:"},
+    {"name": "gender", "prompt": "Please provide your Gender (M/F/Other):"},
+    {"name": "address", "prompt": "Please provide your Address:"},
+    {"name": "city", "prompt": "Please provide your City:"},
+    {"name": "pin_code", "prompt": "Please provide your PIN Code:"},
+    {"name": "state", "prompt": "Please provide your State (e.g., Uttarakhand):"},
+    {"name": "status", "prompt": "Please provide your Status (Rural/Urban):"},
+    {"name": "education", "prompt": "Please provide your Education Level (e.g., Literate):"},
+    {"name": "bpl", "prompt": "Are you Below Poverty Line (Yes/No):"},
+    {"name": "rti_text", "prompt": "Please provide the text of your RTI request:"}
+]
+
 # Initialize the Gemini API with the API key
 def init_gemini():
     """Initialize the Gemini AI client with API key from settings"""
@@ -100,6 +117,16 @@ async def generate_ai_response(user_message: str, conversation_id: str, preferre
         kisan_state = await get_kisan_state(conversation_id)
         if kisan_state:
             return await handle_kisan_collection(user_message, conversation_id, kisan_state)
+        
+        # Check if we're in RTI collection mode
+        rti_state = await get_rti_state(conversation_id)
+        if rti_state:
+            return await handle_rti_collection(user_message, conversation_id, rti_state)
+        
+        # Check if user is requesting an RTI application
+        if await is_rti_request(user_message):
+            # Start RTI collection process
+            return await start_rti_collection(conversation_id)
         
         # Check if user is requesting PM Kisan registration
         if await is_kisan_request(user_message):
@@ -952,6 +979,204 @@ async def complete_kisan_collection(conversation_id: str, kisan_state: Dict[str,
             "freelancer_id": None,
             "conversation_id": conversation_id
         }
+        
+async def is_rti_request(user_message: str) -> bool:
+    """
+    Check if the user message is requesting an RTI application
+    
+    Args:
+        user_message: The message text from the user
+        
+    Returns:
+        True if the message is about RTI application, False otherwise
+    """
+    rti_keywords = [
+        "rti application", "file rti", "right to information", "apply for rti",
+        "submit rti", "rti request", "rti filing"
+    ]
+    
+    message_lower = user_message.lower()
+    return any(keyword in message_lower for keyword in rti_keywords)
+
+async def start_rti_collection(conversation_id: str) -> Dict[str, Any]:
+    """
+    Start the RTI collection process by saving state to Redis
+    and sending the first field prompt
+    
+    Args:
+        conversation_id: The ID of the conversation
+        
+    Returns:
+        Dict with AI response for the first field
+    """
+    # Initialize RTI data in Redis
+    rti_data = {
+        "current_field_index": 0,
+        "fields": {}
+    }
+    
+    # Save to Redis with expiration (24 hours)
+    await redis_client.set(
+        f"rti_collection:{conversation_id}",
+        json.dumps(rti_data),
+        ex=86400  # 24 hours
+    )
+    
+    # Return prompt for the first field
+    first_field = RTI_FIELDS[0]
+    welcome_message = (
+        "I'll help you file an RTI application. I'll need to collect some personal details. "
+        "You can type 'cancel' at any time to stop this process.\n\n"
+        f"{first_field['prompt']}"
+    )
+    
+    return {
+        "type": "text",
+        "text": welcome_message,
+        "sent_by": "ai",
+        "freelancer_id": None,
+        "conversation_id": conversation_id
+    }
+    
+async def handle_rti_collection(user_message: str, conversation_id: str, rti_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle the RTI collection flow
+    
+    Args:
+        user_message: The user's message/input
+        conversation_id: The ID of the conversation
+        rti_state: The current RTI collection state
+        
+    Returns:
+        Dict with AI response
+    """
+    # Check if user wants to cancel
+    if user_message.strip().lower() == "cancel":
+        # Delete the RTI state from Redis
+        await redis_client.delete(f"rti_collection:{conversation_id}")
+        
+        return {
+            "type": "text",
+            "text": "RTI application process cancelled. How else can I assist you?",
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
+    current_index = rti_state["current_field_index"]
+    
+    # Save the user's response for the current field
+    if current_index < len(RTI_FIELDS):
+        current_field = RTI_FIELDS[current_index]
+        field_name = current_field["name"]
+        
+        # Update the RTI state
+        rti_state["fields"][field_name] = user_message
+        rti_state["current_field_index"] += 1
+        
+        # Save updated state to Redis
+        await redis_client.set(
+            f"rti_collection:{conversation_id}",
+            json.dumps(rti_state),
+            ex=86400  # 24 hours
+        )
+        
+        # Check if we've collected all fields
+        if rti_state["current_field_index"] >= len(RTI_FIELDS):
+            # All fields collected, process the RTI application
+            return await complete_rti_collection(conversation_id, rti_state)
+        
+        # Prompt for the next field
+        next_field = RTI_FIELDS[rti_state["current_field_index"]]
+        return {
+            "type": "text",
+            "text": next_field["prompt"],
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
+    # Should not reach here, but just in case
+    return {
+        "type": "text",
+        "text": "There was an issue processing your RTI application. Please start over by asking for an RTI application.",
+        "sent_by": "ai",
+        "freelancer_id": None,
+        "conversation_id": conversation_id
+    }
+    
+async def complete_rti_collection(conversation_id: str, rti_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Complete the RTI collection process and call the RTI application function
+    
+    Args:
+        conversation_id: The ID of the conversation
+        rti_state: The current RTI collection state
+        
+    Returns:
+        Dict with AI response
+    """
+    try:
+        # Extract the collected fields
+        fields = rti_state["fields"]
+        
+        # Clean up Redis state
+        await redis_client.delete(f"rti_collection:{conversation_id}")
+        
+        # Log the collected data
+        logger.info(f"RTI data collected for conversation {conversation_id}: {fields}")
+        
+        # Import the RTI service and submit the application
+        from .rti import rti_file
+        
+        # Format all the collected information for confirmation
+        confirmation = "Thank you for providing your information for the RTI application. Here's what I've collected:\n\n"
+        for field in RTI_FIELDS:
+            field_name = field["name"]
+            field_value = fields.get(field_name, "Not provided")
+            confirmation += f"{field_name.replace('_', ' ').title()}: {field_value}\n"
+        
+        # Start processing the RTI application in the background
+        asyncio.create_task(rti_file(**fields))
+        
+        confirmation += "\nI'm now processing your RTI application. Please follow the on-screen instructions to complete the process."
+        
+        return {
+            "type": "text",
+            "text": confirmation,
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    except Exception as e:
+        logger.error(f"Error completing RTI collection: {str(e)}")
+        return {
+            "type": "text",
+            "text": f"There was an error processing your RTI application: {str(e)}. Please try again later.",
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+        
+async def get_rti_state(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve the current RTI collection state from Redis
+    
+    Args:
+        conversation_id: The ID of the conversation
+        
+    Returns:
+        Dict with current state or None if not in RTI collection mode
+    """
+    state_json = await redis_client.get(f"rti_collection:{conversation_id}")
+    if not state_json:
+        return None
+    
+    try:
+        return json.loads(state_json)
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON in Redis for RTI conversation {conversation_id}")
+        return None
     
 async def should_ai_respond(conversation_id: str) -> bool:
     """
