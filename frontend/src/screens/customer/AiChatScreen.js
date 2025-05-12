@@ -33,6 +33,8 @@ const AiChatScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
+  const [clearingMessages, setClearingMessages] = useState(false);
+  const [clearChatModalVisible, setClearChatModalVisible] = useState(false);
   
   // Language options based on the backend model
   const languages = [
@@ -50,6 +52,17 @@ const AiChatScreen = () => {
         <View style={styles.headerRight}>
           <TouchableOpacity 
             style={styles.headerButton}
+            onPress={handleClearChat}
+            disabled={clearingMessages || !messages.length}
+          >
+            <Ionicons 
+              name="trash-outline" 
+              size={22} 
+              color={clearingMessages || !messages.length ? "#AAAAAA" : "#FF6B6B"} 
+            />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.headerButton}
             onPress={() => setLanguageModalVisible(true)}
           >
             <Ionicons name="language-outline" size={24} color="#0066CC" />
@@ -57,7 +70,7 @@ const AiChatScreen = () => {
         </View>
       ),
     });
-  }, [navigation]);
+  }, [navigation, clearingMessages, messages.length]);
 
   // Create AI conversation if none exists
   useEffect(() => {
@@ -84,7 +97,39 @@ const AiChatScreen = () => {
       }, 200);
     }
   }, [messages]);
-    // Create a conversation exclusively for AI
+
+  // Handle clearing chat messages
+  const handleClearChat = () => {
+    if (!currentConversation || clearingMessages) return;
+    
+    setClearChatModalVisible(true);
+  };
+
+  // Confirm clearing chat messages
+  const confirmClearChat = async () => {
+    if (!currentConversation || clearingMessages) return;
+    
+    try {
+      setClearingMessages(true);
+      
+      // Call API to clear messages
+      await chatService.clearConversationMessages(currentConversation.id);
+      
+      // Update UI
+      setMessages([]);
+      
+      // Show success message
+      Alert.alert('Success', 'All messages have been cleared');
+    } catch (err) {
+      console.error('Error clearing messages:', err);
+      Alert.alert('Error', 'Failed to clear messages. Please try again.');
+    } finally {
+      setClearingMessages(false);
+      setClearChatModalVisible(false);
+    }
+  };
+
+  // Create a conversation exclusively for AI
   const createAiConversation = async () => {
     try {
       setLoading(true);
@@ -118,13 +163,13 @@ const AiChatScreen = () => {
     } finally {
       setLoading(false);
     }
-  };
-  // Fetch messages from API for this conversation
+  };  // Fetch messages from API for this conversation
   const fetchMessages = async () => {
     if (refreshing || !currentConversation) return;
     
     try {
-      setRefreshing(true);      const data = await chatService.getConversationMessages(currentConversation.id, 50, 0);
+      setRefreshing(true);      
+      const data = await chatService.getConversationMessages(currentConversation.id, 50, 0);
       
       if (data && Array.isArray(data)) {
         // Trust the backend sorting - the backend now properly pairs user messages with AI responses
@@ -423,6 +468,45 @@ const AiChatScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Clear Chat Confirmation Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={clearChatModalVisible}
+        onRequestClose={() => setClearChatModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Clear Chat</Text>
+              <TouchableOpacity onPress={() => setClearChatModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.modalBody}>
+              <Text style={styles.modalMessage}>
+                Are you sure you want to clear all messages in this conversation?
+              </Text>
+            </View>
+            
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setClearChatModalVisible(false)}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>              <TouchableOpacity
+                style={[styles.modalButton, styles.confirmButton]}
+                onPress={confirmClearChat}
+              >
+                <Text style={[styles.modalButtonText, { color: 'white' }]}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -499,6 +583,40 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  modalBody: {
+    padding: 16,
+  },
+  modalMessage: {
+    fontSize: 16,
+    color: '#333',
+    textAlign: 'center',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#EEE',
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginHorizontal: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#F0F0F0',
+  },
+  confirmButton: {
+    backgroundColor: '#FF6B6B',
+  },  modalButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333333',
   },
   languageList: {
     padding: 10,

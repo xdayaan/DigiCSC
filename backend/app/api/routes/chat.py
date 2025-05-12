@@ -12,8 +12,9 @@ from ...schemas.chat import (
     GeminiTestResponse
 )
 from ...dependencies import get_current_active_user
-from ...db.mongodb import add_chat_message, get_chat_messages, get_document_messages
+from ...db.mongodb import add_chat_message, get_chat_messages, get_document_messages, clear_conversation_messages
 from ...utils.gemini_ai import generate_ai_response, should_ai_respond
+from ...db.redis import get_redis
 
 router = APIRouter()
 
@@ -28,81 +29,98 @@ async def create_chat_message(
     """
     # Validate the message data
     if message.type == "text" and not message.text:
-        raise HTTPException(status_code=400, detail="Text messages must include text content")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Text is required for text messages"
+        )
     
     if message.type == "document" and not message.document_url:
-        raise HTTPException(status_code=400, detail="Document messages must include document URL")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document URL is required for document messages"
+        )
     
     # Validate conversation ID
     if not message.conversation_id:
-        raise HTTPException(status_code=400, detail="Messages must specify a conversation_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conversation ID is required"
+        )
     
     # Check if the conversation exists and user has access
     from ...db.mongodb import get_conversation
     conversation = await get_conversation(message.conversation_id)
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Create message in the user's MongoDB collection
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+      # Create message in the user's MongoDB collection
     message_data = message.model_dump()
     
     # Handle user ID differently based on sender type
     if current_user.user_type == UserType.CUSTOMER:
-        # Check if customer has access to this conversation
-        if conversation["user_id"] != current_user.id:
-            raise HTTPException(status_code=403, detail="You don't have access to this conversation")
-        
-        # If customer is sending, use their own ID
         message_data["user_id"] = current_user.id
-        # If customer is sending the message, use their own email for the collection
-        message_id = await add_chat_message(current_user.email, message_data)
+        # Make sure sent_by is correctly set as "user"
+        if message_data.get("sent_by") != "ai":
+            message_data["sent_by"] = "user"
     elif message.sent_by == "freelancer" and message.freelancer_id is not None and current_user.id == message.freelancer_id:
-        # Check if freelancer has access to this conversation
-        if conversation["freelancer_id"] != current_user.id:
-            raise HTTPException(status_code=403, detail="You don't have access to this conversation")
-        
-        # For freelancer messages, get the target customer's ID from conversation
-        target_user_id = conversation["user_id"]
-        message_data["user_id"] = target_user_id
-        
-        # Check if the target user (customer) exists
-        from sqlalchemy import select
-        result = await db.execute(select(User).filter(User.id == target_user_id))
-        target_user = result.scalars().first()
-        if not target_user or target_user.user_type != UserType.CUSTOMER:
-            raise HTTPException(status_code=404, detail="Target user not found or not a customer")
-          # If freelancer is sending a message, add to the customer's collection
-        message_id = await add_chat_message(target_user.email, message_data)
+        message_data["freelancer_id"] = current_user.id
+        # Make sure sent_by is correctly set as "freelancer"
+        message_data["sent_by"] = "freelancer"
     else:
-        raise HTTPException(status_code=403, detail="Unauthorized message operation")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to send messages as this user"
+        )
     
+    # Find the customer's email if the current user is a freelancer
+    customer_email = current_user.email
+    if current_user.user_type == UserType.FREELANCER:
+        # Get the conversation to find the customer's user_id
+        from sqlalchemy import select
+        
+        if not conversation.get("user_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Conversation does not have a user_id"
+            )
+            
+        # Query the database for the customer's email
+        async for db_session in get_db():
+            result = await db_session.execute(select(User).filter(User.id == conversation["user_id"]))
+            customer = result.scalars().first()
+            if customer:
+                customer_email = customer.email
+            break
+                
+    # Store in the customer's collection
+    message_id = await add_chat_message(customer_email, message_data)
     if not message_id:
-        raise HTTPException(status_code=500, detail="Failed to create message")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create message"
+        )
     
     user_message_response = {**message_data, "id": message_id}
     
     # If this is a customer sending a text message, check if AI should respond
-    if current_user.user_type == UserType.CUSTOMER and message.type == "text" and message.sent_by == "user":        # Check if AI should respond (no freelancer or freelancer inactive)
+    if current_user.user_type == UserType.CUSTOMER and message.type == "text" and message.sent_by == "user":
         ai_should_respond = await should_ai_respond(message.conversation_id)
         
-        if ai_should_respond:
-            # Generate AI response with user's preferred language
-            ai_message_data = await generate_ai_response(
-                message.text,
+        if ai_should_respond:            # Generate AI response using Gemini
+            ai_response = await generate_ai_response(
+                message.text, 
                 message.conversation_id,
-                preferred_language=current_user.preferred_language.value
+                preferred_language=current_user.preferred_language  # Using user's preferred language from their profile
             )
             
-            if ai_message_data:
-                # Set user_id to be the current user's ID
-                ai_message_data["user_id"] = current_user.id
-                
-                # Store AI response in MongoDB
-                ai_message_id = await add_chat_message(current_user.email, ai_message_data)
-                
+            if ai_response:
+                # Add the AI response to the conversation
+                ai_message_id = await add_chat_message(current_user.email, ai_response)
                 if ai_message_id:
-                    # Return the user message (AI response will appear in the chat automatically)
-                    pass
+                    # Include the AI message ID in the response
+                    ai_response["id"] = ai_message_id
     
     # Return the created message with its ID
     return user_message_response
@@ -110,38 +128,73 @@ async def create_chat_message(
 @router.get("/", response_model=List[ChatMessageResponse])
 async def get_messages(
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 1000,
     freelancer_id: Optional[int] = None,
     conversation_id: Optional[str] = None,
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    Get chat messages for the current user
+    Get chat messages for the current user or for a conversation the user is part of
     Optionally filter by freelancer_id or conversation_id
     """
-    if current_user.user_type != UserType.CUSTOMER:
-        raise HTTPException(status_code=403, detail="Only customers can retrieve their messages directly")
-    
     # If conversation_id is provided, verify user has access to this conversation
     if conversation_id:
         from ...db.mongodb import get_conversation
         conversation = await get_conversation(conversation_id)
         if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found"
+            )
         
         # Check if user has access to this conversation
-        if conversation["user_id"] != current_user.id:
-            raise HTTPException(status_code=403, detail="You don't have access to this conversation")
+        if (current_user.user_type == UserType.CUSTOMER and conversation.get("user_id") != current_user.id) or \
+           (current_user.user_type == UserType.FREELANCER and conversation.get("freelancer_id") != current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this conversation"
+            )
+          # For freelancers, get messages from the customer's collection
+        if current_user.user_type == UserType.FREELANCER:
+            # Find the customer user to get their email
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from sqlalchemy import select
+            from ...db.postgres import get_db
+            
+            async for db in get_db():
+                result = await db.execute(select(User).filter(User.id == conversation["user_id"]))
+                customer = result.scalars().first()
+                if customer:
+                    # When viewing a specific conversation, don't filter by freelancer_id
+                    # to ensure we see all messages in the conversation
+                    messages = await get_chat_messages(
+                        customer.email,
+                        skip=skip,
+                        limit=limit,
+                        conversation_id=conversation_id
+                    )
+                    print("messages being sent: ", messages)
+                    return messages
+                
+            # If we can't find the customer, return empty list
+            return []
+            
+    # For customers, or if no conversation_id specified
+    if current_user.user_type == UserType.CUSTOMER:
+        messages = await get_chat_messages(
+            current_user.email,
+            skip=skip,
+            limit=limit,
+            freelancer_id=freelancer_id,
+            conversation_id=conversation_id
+        )
+
+        print("messages being sent: ", messages)
+        return messages
     
-    messages = await get_chat_messages(
-        current_user.email,
-        skip=skip,
-        limit=limit,
-        freelancer_id=freelancer_id,
-        conversation_id=conversation_id
-    )
-    
-    return messages
+    # For freelancers with no conversation ID, return empty list
+    # (they should specify a conversation to view messages)
+    return []
 
 @router.get("/message-pair/{message_id}", response_model=List[ChatMessageResponse])
 async def get_message_pair(
@@ -153,17 +206,26 @@ async def get_message_pair(
     Get a specific message and its corresponding AI response
     """
     if current_user.user_type != UserType.CUSTOMER:
-        raise HTTPException(status_code=403, detail="Only customers can retrieve their message pairs")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only customers can view their message pairs"
+        )
     
     # Verify user has access to this conversation
     from ...db.mongodb import get_conversation, get_message_with_response
     conversation = await get_conversation(conversation_id)
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
     
     # Check if user has access to this conversation
     if conversation["user_id"] != current_user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this conversation")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this conversation"
+        )
     
     # Get the message pair
     message_pair = await get_message_with_response(
@@ -173,7 +235,10 @@ async def get_message_pair(
     )
     
     if not message_pair:
-        raise HTTPException(status_code=404, detail="Message not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message pair not found"
+        )
     
     return message_pair
 
@@ -181,7 +246,7 @@ async def get_message_pair(
 async def get_customer_messages_by_identifier(
     user_identifier: str,
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 1000,
     freelancer_id: Optional[int] = None,
     conversation_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
@@ -192,37 +257,42 @@ async def get_customer_messages_by_identifier(
     Only authorized freelancers or admins can access
     """
     if current_user.user_type != UserType.FREELANCER:
-        raise HTTPException(status_code=403, detail="Only freelancers can access customer messages by identifier")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only authorized freelancers can view customer messages"
+        )
     
     # Find the customer by identifier (email, phone, or ID)
     from sqlalchemy import select, or_
     try:
-        # Check if the identifier is an ID (integer)
         user_id = int(user_identifier)
-        query = select(User).filter(User.id == user_id, User.user_type == UserType.CUSTOMER)
+        query = select(User).where(User.id == user_id)
     except ValueError:
-        # If not an ID, check if it's an email or phone
-        query = select(User).filter(
-            or_(User.email == user_identifier, User.phone == user_identifier),
-            User.user_type == UserType.CUSTOMER
+        query = select(User).where(
+            or_(
+                User.email == user_identifier,
+                User.phone == user_identifier
+            )
         )
     
     result = await db.execute(query)
     customer = result.scalars().first()
     
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found"
+        )
     
     # If conversation_id is provided, verify freelancer has access to this conversation
     if conversation_id:
         from ...db.mongodb import get_conversation
         conversation = await get_conversation(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        
-        # Check if freelancer has access to this conversation
-        if conversation["freelancer_id"] != current_user.id or conversation["user_id"] != customer.id:
-            raise HTTPException(status_code=403, detail="You don't have access to this conversation")
+        if not conversation or conversation.get("freelancer_id") != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this conversation"
+            )
     
     # Get the customer's messages
     messages = await get_chat_messages(
@@ -245,7 +315,10 @@ async def get_documents(
     Optionally filter by document_type
     """
     if current_user.user_type != UserType.CUSTOMER:
-        raise HTTPException(status_code=403, detail="Only customers can retrieve their documents directly")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only customers can view their document messages"
+        )
     
     documents = await get_document_messages(
         current_user.email,
@@ -266,26 +339,32 @@ async def get_customer_documents_by_identifier(
     Only authorized freelancers can access
     """
     if current_user.user_type != UserType.FREELANCER:
-        raise HTTPException(status_code=403, detail="Only freelancers can access customer documents by identifier")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only authorized freelancers can view customer document messages"
+        )
     
     # Find the customer by identifier (email, phone, or ID)
     from sqlalchemy import select, or_
     try:
-        # Check if the identifier is an ID (integer)
         user_id = int(user_identifier)
-        query = select(User).filter(User.id == user_id, User.user_type == UserType.CUSTOMER)
+        query = select(User).where(User.id == user_id)
     except ValueError:
-        # If not an ID, check if it's an email or phone
-        query = select(User).filter(
-            or_(User.email == user_identifier, User.phone == user_identifier),
-            User.user_type == UserType.CUSTOMER
+        query = select(User).where(
+            or_(
+                User.email == user_identifier,
+                User.phone == user_identifier
+            )
         )
     
     result = await db.execute(query)
     customer = result.scalars().first()
     
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Customer not found"
+        )
     
     # Get the customer's document messages
     documents = await get_document_messages(
@@ -307,21 +386,33 @@ async def process_message_with_gemini(
     """
     # Validate the message data
     if message.type != "text" or not message.text:
-        raise HTTPException(status_code=400, detail="Only text messages are supported for AI processing")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Text content is required for processing with Gemini"
+        )
     
     # Validate conversation ID
     if not message.conversation_id:
-        raise HTTPException(status_code=400, detail="Messages must specify a conversation_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conversation ID is required"
+        )
     
     # Check if the conversation exists and user has access
     from ...db.mongodb import get_conversation
     conversation = await get_conversation(message.conversation_id)
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
     
     # Check if customer has access to this conversation
     if current_user.user_type == UserType.CUSTOMER and conversation["user_id"] != current_user.id:
-        raise HTTPException(status_code=403, detail="You don't have access to this conversation")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this conversation"
+        )
     
     # First, add the user message to the database
     message_data = message.model_dump()
@@ -331,59 +422,114 @@ async def process_message_with_gemini(
     user_message_id = await add_chat_message(current_user.email, message_data)
     
     if not user_message_id:
-        raise HTTPException(status_code=500, detail="Failed to create message")
-    
-    user_message_response = {**message_data, "id": user_message_id}
-    
-    # Check if AI should respond (no freelancer or freelancer inactive)
-    ai_should_respond = await should_ai_respond(message.conversation_id)
-    
-    if ai_should_respond:
-        # Generate AI response with user's preferred language
-        ai_message_data = await generate_ai_response(
-            message.text, 
-            message.conversation_id,
-            preferred_language=current_user.preferred_language.value
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store user message"
         )
-        
-        if ai_message_data:
-            # Set user_id to be the current user's ID
-            ai_message_data["user_id"] = current_user.id
-            
-            # Store AI response in MongoDB
-            ai_message_id = await add_chat_message(current_user.email, ai_message_data)
-            
-            if ai_message_id:
-                # Return the AI response
-                return {**ai_message_data, "id": ai_message_id}
+          # Generate AI response using Gemini
+    ai_response = await generate_ai_response(
+        message.text, 
+        message.conversation_id,
+        preferred_language=current_user.preferred_language  # Using user's preferred language from their profile
+    )
     
-    # If AI shouldn't respond or failed to generate response, return the user message
-    return user_message_response
+    if not ai_response:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate AI response"
+        )
+    
+    # Store the AI response in MongoDB
+    ai_message_id = await add_chat_message(current_user.email, ai_response)
+    
+    if not ai_message_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store AI response"
+        )
+    
+    # Return the AI response with its ID
+    ai_response["id"] = ai_message_id
+    return ai_response
+
 
 @router.post("/gemini-test", response_model=GeminiTestResponse)
 async def test_gemini_ai(
     request: GeminiTestRequest,
 ):
-    from ...utils.gemini_ai import generate_ai_response
-
-    # Generate response with optional language parameter from request
-    ai_response = await generate_ai_response(
-        request.message, 
-        "test-conversation", 
-        preferred_language=request.language
-    )
-    
-    if ai_response:
-        return {
-            "success": True,
-            "user_message": request.message,
-            "ai_response": ai_response.get("text", "No response generated"),
-            "language": request.language
-        }
-    else:
+    """
+    Test endpoint for Gemini AI without authentication
+    """
+    try:
+        # Initialize Gemini model
+        from ...utils.gemini_ai import init_gemini
+        init_gemini()
+        
+        import google.generativeai as genai
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Add language instruction if language is provided
+        message_with_language = request.message
+        if request.language:
+            language_instruction = f"\nPlease respond in {request.language} language only."
+            message_with_language = f"{request.message}\n{language_instruction}"
+        
+        # Generate response
+        response = model.generate_content(message_with_language)
+        
+        if response and response.text:
+            return {
+                "success": True,
+                "user_message": request.message,
+                "ai_response": response.text,
+                "language": request.language
+            }
+        else:
+            return {
+                "success": False,
+                "user_message": request.message,
+                "error": "No response generated"
+            }
+    except Exception as e:
         return {
             "success": False,
             "user_message": request.message,
-            "language": request.language,
-            "error": "Failed to generate AI response"
+            "error": str(e)
         }
+
+@router.delete("/clear-messages/{conversation_id}", status_code=status.HTTP_200_OK)
+async def clear_messages(
+    conversation_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Clear all messages in a specific conversation
+    Only the conversation owner (customer) can clear messages
+    """
+    # Verify the conversation exists and user has access
+    from ...db.mongodb import get_conversation
+    conversation = await get_conversation(conversation_id)
+    
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found"
+        )
+    
+    # Check if user has access to this conversation
+    if current_user.user_type == UserType.CUSTOMER and conversation.get("user_id") != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this conversation"
+        )
+    
+    # Clear messages from the collection
+    success = await clear_conversation_messages(current_user.email, conversation_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to clear messages"
+        )
+    
+    return {"detail": "Messages cleared successfully"}
