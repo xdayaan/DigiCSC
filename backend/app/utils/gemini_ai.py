@@ -36,6 +36,25 @@ UTU_FIELDS = [
     {"name": "course", "prompt": "Please provide your preferred course (default is B.TECH.):", "default": "B.TECH."}
 ]
 
+# Define PAN card fields we need to collect
+PAN_FIELDS = [
+    {"name": "dob", "prompt": "Please provide your date of birth (in DD/MM/YYYY format):"},
+    {"name": "gender", "prompt": "Please provide your gender (Male/Female):"},
+    {"name": "marital_status", "prompt": "Please provide your marital status (Married/Unmarried):"},
+    {"name": "last_name", "prompt": "Please provide your last name:"},
+    {"name": "first_name", "prompt": "Please provide your first name:"},
+    {"name": "middle_name", "prompt": "Please provide your middle name (if any, otherwise type 'None'):"},
+    {"name": "email", "prompt": "Please provide your email address:"},
+    {"name": "phone", "prompt": "Please provide your phone number:"}
+]
+
+# Define PM Kisan fields we need to collect
+KISAN_FIELDS = [
+    {"name": "adhaar_no", "prompt": "Please provide your Aadhaar Number:"},
+    {"name": "mobile_no", "prompt": "Please provide your Mobile Number:"},
+    {"name": "state", "prompt": "Please provide your State (e.g., UTTARAKHAND):"}
+]
+
 # Initialize the Gemini API with the API key
 def init_gemini():
     """Initialize the Gemini AI client with API key from settings"""
@@ -72,6 +91,21 @@ async def generate_ai_response(user_message: str, conversation_id: str, preferre
         if utu_state:
             return await handle_utu_collection(user_message, conversation_id, utu_state)
         
+        # Check if we're in PAN card collection mode
+        pan_state = await get_pan_state(conversation_id)
+        if pan_state:
+            return await handle_pan_collection(user_message, conversation_id, pan_state)
+        
+        # Check if we're in PM Kisan collection mode
+        kisan_state = await get_kisan_state(conversation_id)
+        if kisan_state:
+            return await handle_kisan_collection(user_message, conversation_id, kisan_state)
+        
+        # Check if user is requesting PM Kisan registration
+        if await is_kisan_request(user_message):
+            # Start PM Kisan collection process
+            return await start_kisan_collection(conversation_id)
+        
         # Check if user is requesting a learner's license
         if await is_license_request(user_message):
             # Start license collection process
@@ -79,6 +113,11 @@ async def generate_ai_response(user_message: str, conversation_id: str, preferre
           # Check if user is requesting UTU registration
         if await is_utu_request(user_message):
             return await start_utu_collection(conversation_id)
+        
+        # Check if user is requesting a PAN card
+        if await is_pan_request(user_message):
+            # Start PAN card collection process
+            return await start_pan_collection(conversation_id)
         
         # Initialize Gemini model
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -517,7 +556,403 @@ async def complete_utu_collection(conversation_id: str, utu_state: Dict[str, Any
             "freelancer_id": None,
             "conversation_id": conversation_id
         }
+        
+async def is_pan_request(user_message: str) -> bool:
+    """
+    Check if the user message is requesting a PAN card application
+    
+    Args:
+        user_message: The message text from the user
+        
+    Returns:
+        True if the message is about PAN card application, False otherwise
+    """
+    pan_keywords = [
+        "pan card", "apply for pan", "new pan card", "create pan card",
+        "get pan card", "pan application", "make pan card", "pancard"
+    ]
+    
+    message_lower = user_message.lower()
+    return any(keyword in message_lower for keyword in pan_keywords)
 
+async def start_pan_collection(conversation_id: str) -> Dict[str, Any]:
+    """
+    Start the PAN card collection process by saving state to Redis
+    and sending the first field prompt
+    
+    Args:
+        conversation_id: The ID of the conversation
+        
+    Returns:
+        Dict with AI response for the first field
+    """
+    # Initialize PAN data in Redis
+    pan_data = {
+        "current_field_index": 0,
+        "fields": {}
+    }
+    
+    # Save to Redis with expiration (24 hours)
+    await redis_client.set(
+        f"pan_collection:{conversation_id}",
+        json.dumps(pan_data),
+        ex=86400  # 24 hours
+    )
+    
+    # Return prompt for the first field
+    first_field = PAN_FIELDS[0]
+    welcome_message = (
+        "I'll help you apply for a PAN card. I'll need to collect some personal details. "
+        "You can type 'cancel' at any time to stop this process.\n\n"
+        f"{first_field['prompt']}"
+    )
+    
+    return {
+        "type": "text",
+        "text": welcome_message,
+        "sent_by": "ai",
+        "freelancer_id": None,
+        "conversation_id": conversation_id
+    }
+    
+async def handle_pan_collection(user_message: str, conversation_id: str, pan_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle the PAN card collection flow
+    
+    Args:
+        user_message: The user's message/input
+        conversation_id: The ID of the conversation
+        pan_state: The current PAN card collection state
+        
+    Returns:
+        Dict with AI response
+    """
+    # Check if user wants to cancel
+    if user_message.strip().lower() == "cancel":
+        # Delete the PAN state from Redis
+        await redis_client.delete(f"pan_collection:{conversation_id}")
+        
+        return {
+            "type": "text",
+            "text": "PAN card application process cancelled. How else can I assist you?",
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
+    current_index = pan_state["current_field_index"]
+    
+    # Save the user's response for the current field
+    if current_index < len(PAN_FIELDS):
+        current_field = PAN_FIELDS[current_index]
+        field_name = current_field["name"]
+        
+        # Update the PAN state
+        pan_state["fields"][field_name] = user_message
+        pan_state["current_field_index"] += 1
+        
+        # Save updated state to Redis
+        await redis_client.set(
+            f"pan_collection:{conversation_id}",
+            json.dumps(pan_state),
+            ex=86400  # 24 hours
+        )
+        
+        # Check if we've collected all fields
+        if pan_state["current_field_index"] >= len(PAN_FIELDS):
+            # All fields collected, process the PAN card request
+            return await complete_pan_collection(conversation_id, pan_state)
+        
+        # Prompt for the next field
+        next_field = PAN_FIELDS[pan_state["current_field_index"]]
+        return {
+            "type": "text",
+            "text": next_field["prompt"],
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
+    # Should not reach here, but just in case
+    return {
+        "type": "text",
+        "text": "There was an issue processing your PAN card application. Please start over by asking for a PAN card.",
+        "sent_by": "ai",
+        "freelancer_id": None,
+        "conversation_id": conversation_id
+    }
+
+async def get_pan_state(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve the current PAN card collection state from Redis
+    
+    Args:
+        conversation_id: The ID of the conversation
+        
+    Returns:
+        Dict with current state or None if not in PAN card collection mode
+    """
+    state_json = await redis_client.get(f"pan_collection:{conversation_id}")
+    if not state_json:
+        return None
+    
+    try:
+        return json.loads(state_json)
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON in Redis for PAN card conversation {conversation_id}")
+        return None
+    
+async def complete_pan_collection(conversation_id: str, pan_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Complete the PAN card collection process and call the PAN application function
+    
+    Args:
+        conversation_id: The ID of the conversation
+        pan_state: The current PAN card collection state
+        
+    Returns:
+        Dict with AI response
+    """
+    try:
+        # Extract the collected fields
+        fields = pan_state["fields"]
+        
+        # Clean up Redis state
+        await redis_client.delete(f"pan_collection:{conversation_id}")
+        
+        # Log the collected data
+        logger.info(f"PAN card data collected for conversation {conversation_id}: {fields}")
+        
+        # Import the PAN service and submit the application
+        from .pan import pan_apply
+        
+        # Format all the collected information for confirmation
+        confirmation = "Thank you for providing your information for PAN card application. Here's what I've collected:\n\n"
+        for field in PAN_FIELDS:
+            field_name = field["name"]
+            field_value = fields.get(field_name, "Not provided")
+            confirmation += f"{field_name.replace('_', ' ').title()}: {field_value}\n"
+        
+        # Start processing the PAN card application in the background
+        asyncio.create_task(pan_apply(**fields))
+        
+        confirmation += "\nI'm now processing your PAN card application. The browser will open automatically to handle the application. Please follow the on-screen instructions to complete the process."
+        
+        return {
+            "type": "text",
+            "text": confirmation,
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    except Exception as e:
+        logger.error(f"Error completing PAN card collection: {str(e)}")
+        return {
+            "type": "text",
+            "text": f"There was an error processing your PAN card application: {str(e)}. Please try again later.",
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+        
+async def is_kisan_request(user_message: str) -> bool:
+    """
+    Check if the user message is requesting a PM Kisan application
+    
+    Args:
+        user_message: The message text from the user
+        
+    Returns:
+        True if the message is about PM Kisan application, False otherwise
+    """
+    kisan_keywords = [
+        "pm kisan", "apply for pm kisan", "new farmer registration",
+        "kisan application", "register for pm kisan"
+    ]
+    
+    message_lower = user_message.lower()
+    return any(keyword in message_lower for keyword in kisan_keywords)
+
+async def start_kisan_collection(conversation_id: str) -> Dict[str, Any]:
+    """
+    Start the PM Kisan collection process by saving state to Redis
+    and sending the first field prompt
+    
+    Args:
+        conversation_id: The ID of the conversation
+        
+    Returns:
+        Dict with AI response for the first field
+    """
+    # Initialize Kisan data in Redis
+    kisan_data = {
+        "current_field_index": 0,
+        "fields": {}
+    }
+    
+    # Save to Redis with expiration (24 hours)
+    await redis_client.set(
+        f"kisan_collection:{conversation_id}",
+        json.dumps(kisan_data),
+        ex=86400  # 24 hours
+    )
+    
+    # Return prompt for the first field
+    first_field = KISAN_FIELDS[0]
+    welcome_message = (
+        "I'll help you apply for the PM Kisan scheme. I'll need to collect some personal details. "
+        "You can type 'cancel' at any time to stop this process.\n\n"
+        f"{first_field['prompt']}"
+    )
+    
+    return {
+        "type": "text",
+        "text": welcome_message,
+        "sent_by": "ai",
+        "freelancer_id": None,
+        "conversation_id": conversation_id
+    }
+    
+async def handle_kisan_collection(user_message: str, conversation_id: str, kisan_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle the PM Kisan collection flow
+    
+    Args:
+        user_message: The user's message/input
+        conversation_id: The ID of the conversation
+        kisan_state: The current PM Kisan collection state
+        
+    Returns:
+        Dict with AI response
+    """
+    # Check if user wants to cancel
+    if user_message.strip().lower() == "cancel":
+        # Delete the Kisan state from Redis
+        await redis_client.delete(f"kisan_collection:{conversation_id}")
+        
+        return {
+            "type": "text",
+            "text": "PM Kisan application process cancelled. How else can I assist you?",
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
+    current_index = kisan_state["current_field_index"]
+    
+    # Save the user's response for the current field
+    if current_index < len(KISAN_FIELDS):
+        current_field = KISAN_FIELDS[current_index]
+        field_name = current_field["name"]
+        
+        # Update the Kisan state
+        kisan_state["fields"][field_name] = user_message
+        kisan_state["current_field_index"] += 1
+        
+        # Save updated state to Redis
+        await redis_client.set(
+            f"kisan_collection:{conversation_id}",
+            json.dumps(kisan_state),
+            ex=86400  # 24 hours
+        )
+        
+        # Check if we've collected all fields
+        if kisan_state["current_field_index"] >= len(KISAN_FIELDS):
+            # All fields collected, process the Kisan application
+            return await complete_kisan_collection(conversation_id, kisan_state)
+        
+        # Prompt for the next field
+        next_field = KISAN_FIELDS[kisan_state["current_field_index"]]
+        return {
+            "type": "text",
+            "text": next_field["prompt"],
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
+    # Should not reach here, but just in case
+    return {
+        "type": "text",
+        "text": "There was an issue processing your PM Kisan application. Please start over by asking for PM Kisan registration.",
+        "sent_by": "ai",
+        "freelancer_id": None,
+        "conversation_id": conversation_id
+    }
+    
+async def get_kisan_state(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve the current PM Kisan collection state from Redis
+    
+    Args:
+        conversation_id: The ID of the conversation
+        
+    Returns:
+        Dict with current state or None if not in PM Kisan collection mode
+    """
+    state_json = await redis_client.get(f"kisan_collection:{conversation_id}")
+    if not state_json:
+        return None
+    
+    try:
+        return json.loads(state_json)
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON in Redis for PM Kisan conversation {conversation_id}")
+        return None
+    
+async def complete_kisan_collection(conversation_id: str, kisan_state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Complete the PM Kisan collection process and call the Kisan application function
+    
+    Args:
+        conversation_id: The ID of the conversation
+        kisan_state: The current PM Kisan collection state
+        
+    Returns:
+        Dict with AI response
+    """
+    try:
+        # Extract the collected fields
+        fields = kisan_state["fields"]
+        
+        # Clean up Redis state
+        await redis_client.delete(f"kisan_collection:{conversation_id}")
+        
+        # Log the collected data
+        logger.info(f"PM Kisan data collected for conversation {conversation_id}: {fields}")
+        
+        # Import the Kisan service and submit the application
+        from .pmkisan import kisan_apply
+        
+        # Format all the collected information for confirmation
+        confirmation = "Thank you for providing your information for PM Kisan application. Here's what I've collected:\n\n"
+        for field in KISAN_FIELDS:
+            field_name = field["name"]
+            field_value = fields.get(field_name, "Not provided")
+            confirmation += f"{field_name.replace('_', ' ').title()}: {field_value}\n"
+        
+        # Start processing the Kisan application in the background
+        asyncio.create_task(kisan_apply(**fields))
+        
+        confirmation += "\nI'm now processing your PM Kisan application. Please follow the on-screen instructions to complete the process."
+        
+        return {
+            "type": "text",
+            "text": confirmation,
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    except Exception as e:
+        logger.error(f"Error completing PM Kisan collection: {str(e)}")
+        return {
+            "type": "text",
+            "text": f"There was an error processing your PM Kisan application: {str(e)}. Please try again later.",
+            "sent_by": "ai",
+            "freelancer_id": None,
+            "conversation_id": conversation_id
+        }
+    
 async def should_ai_respond(conversation_id: str) -> bool:
     """
     Determine if AI should respond to this conversation
