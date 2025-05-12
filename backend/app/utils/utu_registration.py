@@ -81,6 +81,8 @@ def provisional_registration(
         
         # Solve CAPTCHA using read_captcha
         captcha_text = read_captcha(driver, By.ID, "imgCaptcha",100,120,200,200)  # Pass the locator type and value for the CAPTCHA image
+
+        print("Captcha text:", captcha_text)
         if captcha_text:
             captcha_input = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "Captcha"))  # Replace "Captcha" with the actual input field ID

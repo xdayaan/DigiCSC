@@ -17,6 +17,7 @@ import MessageBubble from '../../components/chat/MessageBubble';
 import ChatInput from '../../components/chat/ChatInput';
 import { chatService } from '../../services/chatService';
 import api from '../../services/api';
+import VoiceCall from '../../components/call/CallComponent';
 
 import ConversationSelector from '../../components/chat/ConversationSelector';
 
@@ -37,6 +38,9 @@ const ChatScreen = () => {
   const [requestAccepted, setRequestAccepted] = useState(false);
   const [checkingRequest, setCheckingRequest] = useState(false);
   
+  // Call related state
+  const [showCall, setShowCall] = useState(false);
+  
   // Conversation related states
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
@@ -46,11 +50,15 @@ const ChatScreen = () => {
   useEffect(() => {
     if (freelancer && freelancer.name) {
       navigation.setOptions({
-        title: currentConversation ? 
-          `${currentConversation.title} - ${freelancer.name}` : 
-          `Chat with ${freelancer.name}`,
+        title:`${freelancer.name}`,
         headerRight: () => (
           <View style={styles.headerRight}>
+            <TouchableOpacity 
+              style={styles.headerButton}
+              onPress={() => setShowCall(true)}
+            >
+              <Ionicons name="call-outline" size={22} color="#0066CC" />
+            </TouchableOpacity>
             <TouchableOpacity 
               style={styles.headerButton}
               onPress={() => setShowConversationSelector(true)}
@@ -382,8 +390,21 @@ const ChatScreen = () => {
     </View>
   );
   return (
-    <SafeAreaView style={styles.container} edges={['left', 'right']}>
-      {requestId && !requestAccepted ? (
+    <SafeAreaView style={styles.container} edges={['left', 'right']}>      {showCall ? (
+        <View style={styles.callContainer}>
+          <VoiceCall 
+            channelName={freelancer ? `call-${userData.id}-${freelancer.id}` : 'default-channel'}
+            role="guest"
+          />
+          <TouchableOpacity 
+            style={styles.endCallButton}
+            onPress={() => setShowCall(false)}
+          >
+            <Ionicons name="call-outline" size={22} color="#FFFFFF" />
+            <Text style={styles.endCallText}>End Call</Text>
+          </TouchableOpacity>
+        </View>
+      ) : requestId && !requestAccepted ? (
         <View style={styles.waitingContainer}>
           <ActivityIndicator size="large" color="#0066CC" />
           <Text style={styles.waitingTitle}>Waiting for Freelancer</Text>
@@ -584,6 +605,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0066CC',
     fontWeight: '500',
+  },
+  callContainer: {
+    flex: 1,
+    backgroundColor: '#F5F8FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  endCallButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF3B30',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    marginTop: 20,
+  },
+  endCallText: {
+    color: '#FFFFFF',
+    marginLeft: 8,
+    fontWeight: 'bold',
   },
 });
 

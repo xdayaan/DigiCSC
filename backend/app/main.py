@@ -8,6 +8,8 @@ from .api.routes import router as api_router
 from .config import settings
 from .utils.gemini_ai import init_gemini
 
+import time
+
 # Create FastAPI app
 app = FastAPI(title="DigiCSC API")
 
@@ -42,6 +44,8 @@ async def debug_cors():
         "message": "CORS test successful",
         "timestamp": str(datetime.now())
     }
+
+
 
 # Mount the uploads directory as a static file directory
 # This allows access to uploaded files through URLs

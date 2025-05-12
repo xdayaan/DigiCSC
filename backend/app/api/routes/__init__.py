@@ -5,10 +5,12 @@ from .chat import router as chat_router
 from .documents import router as documents_router
 from .freelancer_requests import router as freelancer_requests_router
 from .conversation import router as conversation_router
+from .agora import router as agora_router
 
 router = APIRouter()
 router.include_router(users_router, prefix="/users", tags=["users"])
 router.include_router(auth_router, prefix="/auth", tags=["auth"])
+router.include_router(agora_router)
 router.include_router(chat_router, prefix="/chat", tags=["chat"])
 router.include_router(documents_router, prefix="/documents", tags=["documents"])
 router.include_router(freelancer_requests_router, prefix="/freelancer-requests", tags=["freelancer-requests"])

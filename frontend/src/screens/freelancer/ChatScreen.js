@@ -18,6 +18,7 @@ import MessageBubble from '../../components/chat/MessageBubble';
 import ChatInput from '../../components/chat/ChatInput';
 import { chatService } from '../../services/chatService';
 import api from '../../services/api';
+import VoiceCall from '../../components/call/CallComponent';
 
 const ChatScreen = () => {
   const { userData, logout } = useAuth();
@@ -34,6 +35,9 @@ const ChatScreen = () => {
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   
+  // Call related state
+  const [showCall, setShowCall] = useState(false);
+  
   // Conversation related states
   const [conversations, setConversations] = useState([]);
   const [currentConversation, setCurrentConversation] = useState(null);
@@ -43,11 +47,15 @@ const ChatScreen = () => {
   useEffect(() => {
     if (customer && customer.name) {
       navigation.setOptions({
-        title: currentConversation ? 
-          `${currentConversation.title} - ${customer.name}` : 
-          `Chat with ${customer.name}`,
+        title: `${customer.name} `,
         headerRight: () => (
           <View style={styles.headerRight}>
+            <TouchableOpacity 
+              style={styles.headerButton}
+              onPress={() => setShowCall(true)}
+            >
+              <Ionicons name="call-outline" size={22} color="#0066CC" />
+            </TouchableOpacity>
             <TouchableOpacity 
               style={styles.headerButton}
               onPress={() => setShowConversationSelector(true)}
@@ -323,8 +331,21 @@ const ChatScreen = () => {
   };
   
   return (
-    <SafeAreaView style={styles.container} edges={['left', 'right']}>
-      {loadingConversations ? (
+    <SafeAreaView style={styles.container} edges={['left', 'right']}>      {showCall ? (
+        <View style={styles.callContainer}>
+          <VoiceCall 
+            channelName={customer ? `call-${customer.id}-${userData.id}` : 'default-channel'}
+            role="host"
+          />
+          <TouchableOpacity 
+            style={styles.endCallButton}
+            onPress={() => setShowCall(false)}
+          >
+            <Ionicons name="call-outline" size={22} color="#FFFFFF" />
+            <Text style={styles.endCallText}>End Call</Text>
+          </TouchableOpacity>
+        </View>
+      ) : loadingConversations ? (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color="#0066CC" />
           <Text style={styles.loaderText}>Setting up conversation...</Text>
@@ -384,6 +405,17 @@ const ChatScreen = () => {
         freelancerId={userData?.id}
         currentConversationId={currentConversation?.id}
       />
+      
+      {/* Voice Call Component - Hidden by default */}
+      {showCall && (
+        <VoiceCall 
+          isVisible={showCall}
+          onClose={() => setShowCall(false)}
+          customer={customer}
+          freelancer={userData}
+          conversationId={currentConversation?.id}
+        />
+      )}
     </SafeAreaView>
   );
 };
@@ -456,6 +488,26 @@ const styles = StyleSheet.create({
     color: '#999999',
     textAlign: 'center',
     marginTop: 8,
+  },
+  callContainer: {
+    flex: 1,
+    backgroundColor: '#F5F8FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  endCallButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF3B30',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    marginTop: 20,
+  },
+  endCallText: {
+    color: '#FFFFFF',
+    marginLeft: 8,
+    fontWeight: 'bold',
   },
 });
 
