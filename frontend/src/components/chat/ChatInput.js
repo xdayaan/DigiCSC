@@ -207,15 +207,6 @@ const ChatInput = ({ onSendText, onSendDocument, isLoading = false, disabled = f
           color={disabled ? "#CCCCCC" : isRecording ? "#FFFFFF" : "#0066CC"} 
         />
       </TouchableOpacity>
-      
-      {/* Photo gallery option */}
-      <TouchableOpacity
-        style={styles.galleryButton}
-        onPress={handleImagePicker}
-        disabled={isLoading || disabled}
-      >
-        <Ionicons name="image" size={24} color={disabled ? "#CCCCCC" : "#0066CC"} />
-      </TouchableOpacity>
 
       {/* Text input */}
       <View style={[
