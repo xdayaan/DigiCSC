@@ -70,7 +70,7 @@ async def add_chat_message(user_email: str, message_data: Dict[str, Any]) -> Opt
 async def get_chat_messages(
     user_email: str, 
     skip: int = 0, 
-    limit: int = 50,
+    limit: int = 1000,
     freelancer_id: Optional[int] = None,
     conversation_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -83,8 +83,6 @@ async def get_chat_messages(
     
     # Build query
     query = {}
-    if freelancer_id is not None:
-        query["freelancer_id"] = freelancer_id
     if conversation_id is not None:
         query["conversation_id"] = conversation_id
     
@@ -102,6 +100,8 @@ async def get_chat_messages(
             document["sent_on"] = default_time
                 
         messages.append(document)
+
+    print("message on main function", messages)
     
     return messages
 
@@ -321,3 +321,22 @@ async def get_conversation_recent_messages(
         messages.append(document)
     
     return messages
+
+async def clear_conversation_messages(user_email: str, conversation_id: str) -> bool:
+    """
+    Clear all messages for a specific conversation
+    
+    Args:
+        user_email: The email of the user
+        conversation_id: The ID of the conversation to clear messages from
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    collection_name = f"customer_{user_email.replace('@', '_').replace('.', '_')}"
+    
+    # Delete all messages with the specified conversation_id
+    result = await mongodb[collection_name].delete_many({"conversation_id": conversation_id})
+    
+    # Return True if at least one message was deleted
+    return result.deleted_count > 0

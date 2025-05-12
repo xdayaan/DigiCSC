@@ -1,3 +1,4 @@
+# Core API dependencies
 fastapi>=0.88.0
 uvicorn>=0.25.0
 sqlalchemy>=2.0.0
@@ -9,11 +10,25 @@ psycopg2-binary
 alembic>=1.9.1
 asyncpg>=0.27.0
 python-multipart>=0.0.6
-google-generativeai>=0.3.0
 pydantic-settings
 tenacity>=8.2.2
-redis>=4.5.5
+aiofiles>=23.1.0  # For async file operations
+
+# Authentication
 bcrypt>=3.2.0
 python-jose>=3.3.0
+
+# Networking
 httpx>=0.24.0
-aiofiles>=23.1.0  # For async file operations
+
+# AI and Data Processing
+google-generativeai>=0.3.0
+redis>=4.5.5
+
+# License automation dependencies
+selenium>=4.11.0
+webdriver-manager>=4.0.0
+pillow>=9.5.0
+pytesseract>=0.3.10  # For CAPTCHA reading
+
+agora-token-builder

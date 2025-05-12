@@ -61,9 +61,9 @@ export const chatService = {  // Create a new freelancer request
   },
 
   // Get chat messages for the current user
-  getChatMessages: async (limit = 50, skip = 0, freelancerId = null) => {
+  getChatMessages: async (limit = 1000, skip = 0, freelancerId = null) => {
     try {
-      let url = `/chat?limit=${limit}&skip=${skip}`;
+      let url = `/chat`;
       if (freelancerId) {
         url += `&freelancer_id=${freelancerId}`;
       }
@@ -176,9 +176,8 @@ export const chatService = {  // Create a new freelancer request
       throw error;
     }
   },
-
   // Get messages for a specific conversation
-  getConversationMessages: async (conversationId, limit = 50, skip = 0) => {
+  getConversationMessages: async (conversationId, limit = 1000, skip = 0) => {
     try {
       const response = await api.get(`/chat?conversation_id=${conversationId}&limit=${limit}&skip=${skip}`);
       return response.data;
@@ -286,6 +285,17 @@ export const chatService = {  // Create a new freelancer request
     } catch (error) {
       console.error('Error getting message pair:', error);
       return null;
+    }
+  },
+  
+  // Clear all messages in a conversation
+  clearConversationMessages: async (conversationId) => {
+    try {
+      const response = await api.delete(`/chat/clear-messages/${conversationId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error clearing conversation messages:', error);
+      throw error;
     }
   },
 };

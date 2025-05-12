@@ -146,17 +146,14 @@ const ChatScreen = () => {
       console.error('Error creating default conversation:', err);
       setError('Could not create a conversation. Please try again.');
     }
-  };
-  // Fetch messages from API for this specific customer and conversation
+  };  // Fetch messages from API for this specific customer and conversation
   const fetchMessages = async () => {
     if (!customer || !currentConversation || refreshing) return; // Don't fetch if no customer, conversation or already refreshing
     
     try {
       setRefreshing(true);
-      // Use customer identifier (email, phone, or ID) to get messages for this conversation
-      const identifier = customer.email || customer.phone || customer.id;
-      const response = await chatService.getCustomerConversationMessages(
-        identifier,
+      // Use conversation ID to get messages for this conversation
+      const response = await chatService.getConversationMessages(
         currentConversation.id
       );
       
