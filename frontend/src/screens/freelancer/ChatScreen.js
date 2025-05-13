@@ -7,12 +7,15 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import ConversationSelector from '../../components/chat/ConversationSelector';
 import { useAuth } from '../../hooks/useAuth';
+import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import MessageBubble from '../../components/chat/MessageBubble';
 import ChatInput from '../../components/chat/ChatInput';
@@ -247,52 +250,128 @@ const ChatScreen = () => {
       const tempMessage = {
         id: 'temp-doc-' + Date.now(),
         type: 'document',
-        text: 'Uploading document...',
+        text: `Uploading document: ${file.name || 'file'}...`,
         document_url: null,
         sent_by: 'freelancer',
         freelancer_id: userData.id,
         conversation_id: currentConversation.id,
         sent_on: new Date().toISOString()
       };
-        // Optimistically add to UI
+        
+      // Optimistically add to UI
       setMessages(prev => [...prev, tempMessage]);
-        // For freelancers, use the upload-with-chat endpoint
+      
+      console.log("Uploading document:", file);
+      
+      // Get authentication token
+      const token = await AsyncStorage.getItem('userToken');
+      
+      // Create FormData object for file upload
       const formData = new FormData();
       
-      // Create file object with the correct structure for React Native FormData
-      const fileToUpload = {
-        uri: file.uri,
-        type: file.type || 'application/pdf',
-        name: file.name || 'document.pdf'
-      };
+      // For React Native environments, we need to be careful with file objects
+      let fileToUpload;
       
-      // Append file as the first field - this is important for multipart/form-data parsing
-      formData.append('file', fileToUpload);
-      
-      // Add metadata in the correct order (after the file)
-      const identifier = customer.email || customer.phone || customer.id;
-      formData.append('user_identifier', identifier);
-      formData.append('sent_by', 'freelancer');
-      formData.append('text', ''); // Optional description
-      formData.append('conversation_id', currentConversation.id); // Add conversation ID
-        // Upload document to customer's chat
-      const response = await api.post('/documents/upload-with-chat', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          'Accept': 'application/json',
-        },
-        transformRequest: () => formData, // Prevent axios from trying to transform the FormData
-      });
-      
-      // Update with actual message from server
-      if (response.data) {
-        // Fetch the latest messages to get the new document message
-        fetchMessages();
+      if (Platform.OS === 'web') {
+        // For web: If it's already a File/Blob object, use it directly
+        if (file instanceof Blob || file instanceof File) {
+          fileToUpload = file;
+        } else if (file.uri && file.uri.startsWith('data:')) {
+          // Convert base64 data URI to blob for web
+          try {
+            const response = await fetch(file.uri);
+            const blob = await response.blob();
+            fileToUpload = new File([blob], file.name || 'image.png', { 
+              type: file.mimeType || file.type || 'image/png' 
+            });
+          } catch (e) {
+            console.error("Error converting data URI to blob:", e);
+            throw new Error("Could not process the image file");
+          }
+        }
+      } else {
+        // Native: Format the file object properly
+        fileToUpload = {
+          uri: file.uri,
+          type: file.mimeType || file.type || 'application/octet-stream',
+          name: file.name || 'document.pdf'
+        };
       }
       
+      // Add file to FormData with the correct field name
+      formData.append('file', fileToUpload);
+      
+      // Add fields
+      formData.append('description', 'string');
+      formData.append('freelancer_id', userData.id);
+      
+      // Base URL based on platform
+      const BASE_URL = Platform.select({
+        ios: 'http://localhost:8000',
+        android: 'http://10.0.2.2:8000',
+        default: 'http://localhost:8000',
+      });
+      
+      // Make direct Axios call to upload endpoint
+      const response = await axios.post(
+        `${BASE_URL}/api/documents/upload`,
+        formData,
+        {
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          // Important: Don't transform the formData
+          transformRequest: (data) => data,
+        }
+      );
+      
+      // Extract document information from the response
+      const documentData = response.data;
+      
+      if (documentData && documentData.document_url) {
+        // Remove the temporary message
+        setMessages(prev => prev.filter(msg => !msg.id.toString().startsWith('temp-doc-')));
+        
+        // Send document message to the conversation
+        await chatService.sendTextMessageToConversation(
+          file.name || 'Document',
+          'freelancer',
+          currentConversation.id,
+          userData.id,
+          documentData.document_url,
+          'document'
+        );
+        
+        // Refresh messages to get the server version
+        await fetchMessages();
+      } else {
+        Alert.alert('Warning', 'Document was uploaded but some information is missing. It may not display correctly.');
+      }
     } catch (err) {
       console.error('Error uploading document:', err);
-      Alert.alert('Error', 'Failed to upload document. Please try again.');
+      
+      // Extract error message from response if available
+      let errorMessage = 'Failed to upload document. Please try again.';
+      
+      if (err.response) {
+        console.error('Error response data:', JSON.stringify(err.response.data));
+        
+        if (err.response.data.detail) {
+          // Handle array of validation errors
+          if (Array.isArray(err.response.data.detail)) {
+            errorMessage = err.response.data.detail
+              .map(item => `${item.msg} (${item.loc.join('.')})`)
+              .join('\n');
+          } else {
+            errorMessage = err.response.data.detail;
+          }
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      Alert.alert('Error', errorMessage);
       
       // Remove temporary message on error
       setMessages(prev => prev.filter(msg => 
@@ -302,7 +381,7 @@ const ChatScreen = () => {
       setSendingMessage(false);
     }
   };
-
+  
   // Render each message
   const renderMessage = ({ item }) => (
     <MessageBubble 

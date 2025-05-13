@@ -12,8 +12,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import Voice from '@react-native-voice/voice';
 
-const ChatInput = ({ onSendText, onSendDocument, isLoading = false, disabled = false }) => {
-  const [message, setMessage] = useState('');
+const ChatInput = ({ onSendText, onSendDocument, isLoading = false, disabled = false, inputText = '' }) => {
+  const [message, setMessage] = useState(inputText);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
 
@@ -23,7 +23,7 @@ const ChatInput = ({ onSendText, onSendDocument, isLoading = false, disabled = f
     const onSpeechResults = (e) => {
       if (e.value && e.value.length > 0) {
         setMessage(prev => e.value[0]);
-      }
+      } 
     };
 
     const onSpeechError = (e) => {
@@ -134,15 +134,15 @@ const ChatInput = ({ onSendText, onSendDocument, isLoading = false, disabled = f
   const handleDocumentPicker = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/*', 'application/pdf', 'application/msword', 
-               'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-               'text/plain', 'application/vnd.ms-excel',
-               'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-        copyToCacheDirectory: true
+        type: '*/*', // Allow all types of files
+        copyToCacheDirectory: true,
+        multiple: false,
       });
+      console.log("Result: ", result)
       
       if (result.canceled === false && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
+        console.log("Selected file: ", file);
         onSendDocument(file);
       }
     } catch (error) {
@@ -151,38 +151,6 @@ const ChatInput = ({ onSendText, onSendDocument, isLoading = false, disabled = f
     }
   };
 
-  // Handle image selection from gallery
-  const handleImagePicker = async () => {
-    try {
-      // Request media library permissions
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert('Permission required', 'Media library permission is required to select images.');
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.8,
-      });
-
-      if (result.canceled === false && result.assets && result.assets.length > 0) {
-        const image = result.assets[0];
-        // Add file name and type to match document picker format
-        const file = {
-          ...image,
-          name: `gallery_${Date.now()}.jpg`,
-          type: 'image/jpeg'
-        };
-        onSendDocument(file);
-      }
-    } catch (error) {
-      console.error('Error picking image:', error);
-      Alert.alert('Error', 'Could not select the image. Please try again.');
-    }
-  };
 
   return (
     <View style={styles.container}>

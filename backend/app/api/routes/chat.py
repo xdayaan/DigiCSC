@@ -9,7 +9,7 @@ from ...schemas.chat import (
     ChatMessageCreate, 
     ChatMessageResponse, 
     GeminiTestRequest, 
-    GeminiTestResponse
+    GeminiTestResponse 
 )
 from ...dependencies import get_current_active_user
 from ...db.mongodb import add_chat_message, get_chat_messages, get_document_messages, clear_conversation_messages
@@ -27,12 +27,6 @@ async def create_chat_message(
     """
     Create a new chat message
     """
-    # Validate the message data
-    if message.type == "text" and not message.text:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Text is required for text messages"
-        )
     
     if message.type == "document" and not message.document_url:
         raise HTTPException(
@@ -382,15 +376,9 @@ async def process_message_with_gemini(
 ):
     """
     Process a user message with Gemini AI and send an AI response
-    if the freelancer is not available in the conversation
+    if the freelancer is not available in the conversation.
+    This endpoint handles both text messages and document processing.
     """
-    # Validate the message data
-    if message.type != "text" or not message.text:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Text content is required for processing with Gemini"
-        )
-    
     # Validate conversation ID
     if not message.conversation_id:
         raise HTTPException(
@@ -426,9 +414,103 @@ async def process_message_with_gemini(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store user message"
         )
-          # Generate AI response using Gemini
+    
+    # Process differently based on message type
+    text_for_gemini = ""
+    
+    if message.type == "text":
+        if not message.text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Text content is required for text messages"
+            )
+        # Use the text directly
+        text_for_gemini = message.text
+        
+    elif message.type == "document":
+        if not message.document_url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Document URL is required for document messages"
+            )
+        
+        # Extract content from document
+        import os
+        import mimetypes
+        from pathlib import Path
+        
+        # The document URL is relative to the server's uploads folder
+        # Convert relative path to absolute path
+        document_path = os.path.join(os.getcwd(), message.document_url.lstrip('/'))
+        
+        try:
+            # Get document file type based on extension or mimetype
+            mime_type, _ = mimetypes.guess_type(document_path)
+            file_ext = os.path.splitext(document_path)[1].lower()
+            
+            # Extract content based on file type
+            document_content = ""
+            
+            # Text files
+            if file_ext in ['.txt', '.md', '.csv', '.json', '.xml', '.html', '.css', '.js']:
+                with open(document_path, 'r', encoding='utf-8', errors='ignore') as file:
+                    document_content = file.read()
+            
+            # PDF files
+            elif file_ext == '.pdf':
+                import PyPDF2
+                with open(document_path, 'rb') as file:
+                    pdf_reader = PyPDF2.PdfReader(file)
+                    for page_num in range(len(pdf_reader.pages)):
+                        document_content += pdf_reader.pages[page_num].extract_text() + "\n"
+            
+            # Word documents
+            elif file_ext in ['.doc', '.docx']:
+                import docx
+                doc = docx.Document(document_path)
+                document_content = "\n".join([para.text for para in doc.paragraphs])
+            
+            # Excel files
+            elif file_ext in ['.xls', '.xlsx']:
+                import pandas as pd
+                df = pd.read_excel(document_path)
+                document_content = df.to_string()
+            
+            # Images
+            elif mime_type and mime_type.startswith('image/'):
+                import pytesseract
+                from PIL import Image
+                
+                # Extract text from image using OCR
+                text = pytesseract.image_to_string(Image.open(document_path))
+                document_content = text if text.strip() else "This appears to be an image without text content."
+                
+                # Add instruction for Gemini to analyze the image content
+                if not text.strip():
+                    document_content = "[This is an image that may contain visual information]"
+            
+            # Handle unsupported file types
+            else:
+                document_content = f"Document of type {file_ext} submitted. Please describe what the document contains."
+            
+            # Create prompt for document analysis
+            text_for_gemini = f"I've shared a document with you. Here's the content I could extract:\n\n{document_content}\n\nPlease analyze and summarize this document content."
+            
+            # If no content could be extracted
+            if not document_content.strip():
+                text_for_gemini = f"I've shared a document of type {file_ext}. Please let me know what kind of information you need from this document."
+                
+        except Exception as e:
+            # Log the error
+            print(f"Error extracting document content: {str(e)}")
+            text_for_gemini = "I've shared a document with you, but there was an error extracting its content. Can you please suggest what information you need from this document?"
+    
+    else:
+        text_for_gemini = f"I've shared something with you. Please let me know if you need any specific information. {text}"
+    
+    # Generate AI response using Gemini
     ai_response = await generate_ai_response(
-        message.text, 
+        text_for_gemini, 
         message.conversation_id,
         preferred_language=current_user.preferred_language  # Using user's preferred language from their profile
     )

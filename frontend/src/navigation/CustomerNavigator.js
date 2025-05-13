@@ -8,6 +8,7 @@ import CustomerDashboardScreen from '../screens/customer/CustomerDashboardScreen
 import FreelancerListScreen from '../screens/customer/FreelancerListScreen';
 import ChatScreen from '../screens/customer/ChatScreen';
 import AiChatScreen from '../screens/customer/AiChatScreen';
+import AppScreen from '../screens/customer/AppScreen';
 // import FreelancerDetailScreen from '../screens/customer/FreelancerDetailScreen';
 // import TermsOfUseScreen from '../screens/customer/TermsOfUseScreen';
 // import AccountSettingsScreen from '../screens/customer/AccountSettingsScreen';
@@ -22,6 +23,7 @@ const HomeStack = () => {
       <Stack.Screen name="FreelancerList" component={FreelancerListScreen} options={{ title: 'Freelancers' }} />
       <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Chat' }} />
       <Stack.Screen name="AiChat" component={AiChatScreen} options={{ title: 'AI Assistant' }} />
+      <Stack.Screen name="AppScreen" component={AppScreen} options={{ title: 'Services' }} />
     </Stack.Navigator>
   );
 };

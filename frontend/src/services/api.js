@@ -79,4 +79,72 @@ api.interceptors.response.use(
   }
 );
 
+// Helper function for uploading files
+export const uploadFile = async (url, formData) => {
+  try {
+    // For file uploads, don't set Content-Type header
+    // the browser/axios set it automatically with boundary
+    const config = {
+      headers: {
+        'Accept': 'application/json',
+      },
+      // Don't transform the form data
+      transformRequest: (data) => data
+    };
+    
+    return await api.post(url, formData, config);
+  } catch (error) {
+    console.error('File upload error:', error);
+    throw error;
+  }
+};
+
+// Specialized helper for uploading documents
+export const uploadDocument = async (file, conversationId) => {
+  try {
+    // Create form data
+    const formData = new FormData();
+    
+    // Handle different file formats (web vs native)
+    if (file instanceof Blob || file instanceof File) {
+      // For web: Use the file directly
+      formData.append('file', file, file.name || 'document.pdf');
+    } else {
+      // For React Native: Create proper file object
+      const fileToUpload = {
+        uri: file.uri,
+        type: file.mimeType || file.type || 'application/octet-stream',
+        name: file.name || 'document.pdf'
+      };
+      formData.append('file', fileToUpload);
+    }
+    
+    // Add conversation_id if available
+    if (conversationId) {
+      formData.append('conversation_id', conversationId.toString());
+    }
+    
+    // Upload the document
+    const response = await api.post('/documents/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        'Accept': 'application/json',
+      },
+      transformRequest: (data) => data,
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Document upload error:', error);
+    
+    // Re-throw with better error message if possible
+    if (error.response && error.response.data && error.response.data.detail) {
+      error.message = error.response.data.detail;
+    } else if (error.formattedMessage) {
+      error.message = error.formattedMessage;
+    }
+    throw error;
+  }
+};
+
 export default api;

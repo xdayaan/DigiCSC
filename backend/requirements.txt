@@ -32,3 +32,10 @@ pillow>=9.5.0
 pytesseract>=0.3.10  # For CAPTCHA reading
 
 agora-token-builder
+
+pytesseract
+PyPDF2
+python-docx
+pandas
+openpyxl
+Pillow

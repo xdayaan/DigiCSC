@@ -89,29 +89,36 @@ export const chatService = {  // Create a new freelancer request
       console.error('Error sending text message:', error);
       throw error;
     }
-  },
-
-  // Upload a document and send as message
+  },  // Upload a document and send as message
   uploadDocumentMessage: async (file, description = null, freelancerId = null) => {
     try {
       const formData = new FormData();
-      formData.append('file', {
-        uri: file.uri,
-        name: file.name || 'document.pdf',
-        type: file.type || 'application/pdf'
-      });
+      
+      // Handle file upload based on platform (web vs native)
+      if (file instanceof Blob || file instanceof File) {
+        // For web: Use the file directly
+        formData.append('file', file, file.name || 'document.pdf');
+      } else {
+        // For React Native: Create proper file object with required properties
+        const fileToUpload = {
+          uri: file.uri,
+          name: file.name || 'document.pdf',
+          type: file.type || 'application/pdf'
+        };
+        // Append file as the first field (important for server parsing)
+        formData.append('file', fileToUpload);
+      }
+      
+      // Add additional fields after the file
       if (description) {
         formData.append('description', description);
-      }
-      if (freelancerId) {
+      }      if (freelancerId) {
         formData.append('freelancer_id', freelancerId);
       }
-
-      const response = await api.post('/documents/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      
+      // Import the uploadFile utility for consistent file upload handling
+      const { uploadFile } = require('./api');
+      const response = await uploadFile('/documents/upload', formData);
       return response.data;
     } catch (error) {
       console.error('Error uploading document:', error);
@@ -227,33 +234,45 @@ export const chatService = {  // Create a new freelancer request
       return null;
     }
   },
-  
-  // Send a text message to a specific conversation
-  sendTextMessageToConversation: async (text, sentBy, conversationId, freelancerId = null) => {
+    // Send a message (text or document) to a specific conversation
+  sendTextMessageToConversation: async (text, sentBy, conversationId, freelancerId = null, documentUrl = null, messageType = 'text') => {
     try {
-      const response = await api.post('/chat', {
-        type: 'text',
+      const payload = {
+        type: messageType, // Can be 'text' or 'document'
         text,
         sent_by: sentBy,
         conversation_id: conversationId,
         freelancer_id: freelancerId
-      });
+      };
+      
+      // If document URL is provided, add it to the payload
+      if (documentUrl) {
+        payload.document_url = documentUrl;
+      }
+      
+      const response = await api.post('/chat', payload);
       return response.data;
     } catch (error) {
-      console.error('Error sending text message to conversation:', error);
+      console.error('Error sending message to conversation:', error);
       throw error;
     }
   },
-  
   // Send a message directly to Gemini AI
-  sendMessageToAI: async (text, conversationId) => {
+  sendMessageToAI: async (text, conversationId, documentUrl = null, messageType = 'text') => {
     try {
-      const response = await api.post('/chat/gemini', {
-        type: 'text',
+      const payload = {
+        type: messageType, // Use the specified message type (text or document)
         text,
         sent_by: 'user',
         conversation_id: conversationId
-      });
+      };
+      
+      // If document URL is provided, add it to the payload
+      if (documentUrl) {
+        payload.document_url = documentUrl;
+      }
+      
+      const response = await api.post('/chat/gemini', payload);
       return response.data;
     } catch (error) {
       console.error('Error sending message to AI:', error);

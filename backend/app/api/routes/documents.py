@@ -12,30 +12,37 @@ from ...config import settings
 from ...db.mongodb import add_chat_message
 from ...schemas.chat import DocumentUploadResponse, DocumentDeleteResponse
 
-router = APIRouter()
+router = APIRouter() 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
     description: Optional[str] = Form(None),
     freelancer_id: Optional[int] = Form(None),
+    conversation_id: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
     """
     Upload a document and automatically create a chat message for it
     """
-    # Check file size
-    file_size = 0
-    for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
-        file_size += len(chunk)
-        if file_size > settings.MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="File size exceeds maximum allowed size"
-            )
-    # Reset file pointer after reading
-    await file.seek(0)
+    try:
+        # Check file size
+        file_size = 0
+        for chunk in iter(lambda: file.file.read(1024 * 1024), b""):
+            file_size += len(chunk)
+            if file_size > settings.MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="File size exceeds maximum allowed size"
+                )
+        # Reset file pointer after reading
+        await file.seek(0)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file format: {str(e)}"
+        )
     
     # Check if file is valid
     if not file.filename or not is_valid_document(file.filename):

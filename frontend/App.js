@@ -6,6 +6,8 @@ import AuthNavigator from './src/navigation/AuthNavigator';
 import CustomerNavigator from './src/navigation/CustomerNavigator';
 import FreelancerNavigator from './src/navigation/FreelancerNavigator';
 import SplashScreen from './src/screens/SplashScreen';
+import AppScreen from './src/screens/customer/AppScreen';
+
 
 const Stack = createStackNavigator();
 
@@ -18,6 +20,7 @@ const App = () => {
           <Stack.Screen name="Auth" component={AuthNavigator} />
           <Stack.Screen name="CustomerMain" component={CustomerNavigator} />
           <Stack.Screen name="FreelancerMain" component={FreelancerNavigator} />
+          <Stack.Screen name="AppsScreen" component={AppScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </AuthProvider>

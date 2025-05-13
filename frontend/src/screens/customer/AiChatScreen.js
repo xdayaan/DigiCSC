@@ -14,16 +14,23 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../../hooks/useAuth';
+import axios from 'axios';
+import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import MessageBubble from '../../components/chat/MessageBubble';
 import ChatInput from '../../components/chat/ChatInput';
 import api from '../../services/api';
 import chatService from '../../services/chatService';
 
-const AiChatScreen = () => {
+const AiChatScreen = ({ route }) => {
   const { userData, updateUserData } = useAuth();
   const navigation = useNavigation();
   const flatListRef = useRef(null);
+  
+  // Get auto message from route params if available
+  const autoMessage = route.params?.autoMessage || null;
+  const autoSend = route.params?.autoSend || false;
   
   // State variables
   const [messages, setMessages] = useState([]);
@@ -44,12 +51,25 @@ const AiChatScreen = () => {
     { value: 'gharwali', label: 'Gharwali' },
   ];
 
+
   // Set up navigation header options
   useEffect(() => {
     navigation.setOptions({
       title: 'AI Assistant',
       headerRight: () => (
         <View style={styles.headerRight}>
+          <TouchableOpacity 
+            style={styles.headerButton}
+
+            disabled={clearingMessages || !messages.length}
+          >
+            <Ionicons 
+              name="apps-outline" 
+              size={22} 
+              onPress={() => navigation.navigate('AppsScreen')}
+              color={clearingMessages || !messages.length ? "#AAAAAA" : "#FF6B6B"} 
+            />
+          </TouchableOpacity>
           <TouchableOpacity 
             style={styles.headerButton}
             onPress={handleClearChat}
@@ -71,7 +91,6 @@ const AiChatScreen = () => {
       ),
     });
   }, [navigation, clearingMessages, messages.length]);
-
   // Create AI conversation if none exists
   useEffect(() => {
     createAiConversation();
@@ -88,6 +107,26 @@ const AiChatScreen = () => {
       return () => clearInterval(interval);
     }
   }, [currentConversation]);
+    // Handle auto-sending message when conversation is ready and we have a message to send
+  useEffect(() => {
+    const autoSendMessage = async () => {
+      // Make sure conversation is ready, we have a message to send, and we're not loading/sending
+      if (currentConversation && autoMessage && autoSend && !loading && !sendingMessage) {
+        console.log("Auto-sending message:", autoMessage);
+        
+        // Small delay to ensure everything is ready
+        setTimeout(async () => {
+          // Send the auto message
+          await handleSendText(autoMessage);
+          
+          // Clear the route params to prevent re-sending on navigation changes
+          navigation.setParams({ autoMessage: null, autoSend: false });
+        }, 500);
+      }
+    };
+    
+    autoSendMessage();
+  }, [currentConversation, loading, sendingMessage, autoMessage, autoSend]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -255,76 +294,182 @@ const AiChatScreen = () => {
       setSendingMessage(false);
     }
   };
-
   // Handle sending document
-  const handleSendDocument = async (file) => {
-    if (!currentConversation) {
-      Alert.alert('Error', 'AI Assistant is not available. Please try again.');
-      return;
+const handleSendDocument = async (file) => {
+  try {
+    console.log("handle Send Document Triggered")
+    setSendingMessage(true);
+      // Create temporary message for UI feedback
+    const tempMessage = {
+      id: 'temp-doc-' + Date.now(),
+      type: 'document',
+      text: `Uploading document: ${file.name || 'file'}...`,
+      document_url: null,
+      sent_by: 'user',
+      conversation_id: currentConversation.id,
+      freelancer_id: null,
+      sent_on: new Date().toISOString()
+    };
+    
+    // Optimistically add to UI
+    setMessages(prev => [...prev, tempMessage]);
+
+    console.log("Uploading document:", file);
+    
+    // Get authentication token
+    const token = await AsyncStorage.getItem('userToken');
+      // Create FormData object for file upload
+    const formData = new FormData();
+    
+    // For React Native environments, we need to be careful with file objects
+    let fileToUpload;
+    
+    if (Platform.OS === 'web') {
+      // For web: If it's already a File/Blob object, use it directly
+      if (file instanceof Blob || file instanceof File) {
+        fileToUpload = file;
+      } else if (file.uri && file.uri.startsWith('data:')) {
+        // Convert base64 data URI to blob for web
+        try {
+          const response = await fetch(file.uri);
+          const blob = await response.blob();
+          fileToUpload = new File([blob], file.name || 'image.png', { 
+            type: file.mimeType || file.type || 'image/png' 
+          });
+        } catch (e) {
+          console.error("Error converting data URI to blob:", e);
+          throw new Error("Could not process the image file");
+        }
+      }
+    } else {
+      // For React Native: Format the file object properly
+      fileToUpload = {
+        uri: file.uri,
+        type: file.mimeType || file.type || 'application/octet-stream',
+        name: file.name || 'document.pdf'
+      };
     }
     
-    try {
-      setSendingMessage(true);
-      
-      // Create temporary message for UI feedback
-      const tempMessage = {
-        id: 'temp-doc-' + Date.now(),
+    console.log("File to upload:", fileToUpload);
+    
+    // Append the file to FormData with the correct field name
+    formData.append('file', fileToUpload);
+    
+    // Add required fields
+    formData.append('description', 'string');
+    formData.append('freelancer_id', '0');
+    
+    // Define the base URL based on platform
+    const BASE_URL = Platform.select({
+      ios: 'http://localhost:8000',
+      android: 'http://10.0.2.2:8000',
+      default: 'http://localhost:8000',
+    });
+    
+    // For debugging - log the form data entries
+    if (Platform.OS === 'web') {
+      for (let pair of formData.entries()) {
+        console.log(pair[0], pair[1]);
+      }
+    }
+    
+    // Make direct Axios call to upload endpoint
+    const response = await axios.post(
+      `${BASE_URL}/api/documents/upload`,
+      formData,
+      {
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          // Let the browser set the Content-Type with boundary
+          // Don't set Content-Type header manually for multipart/form-data
+        },
+        // Important: Don't transform the formData
+        transformRequest: (data) => data,
+      }
+    );
+      console.log('Document upload response:', response.data);    // Extract document information from the response
+    const documentData = await response.data;
+    
+    if (documentData && documentData.document_url) {
+      // Create a permanent document message in the specified format
+      const permaMessage = {
+        id: documentData.message_id || 'doc-' + Date.now(),
         type: 'document',
-        text: 'Uploading document...',
-        document_url: null,
+        text: file.name || 'Document',
+        document_url: documentData.document_url,
         sent_by: 'user',
         conversation_id: currentConversation.id,
         freelancer_id: null,
         sent_on: new Date().toISOString()
       };
       
-      // Optimistically add to UI
-      setMessages(prev => [...prev, tempMessage]);
-      
-      // Create form data with conversation ID
-      const formData = new FormData();
-      
-      // Create file object with the correct structure for React Native FormData
-      const fileToUpload = {
-        uri: file.uri,
-        type: file.type || 'application/pdf',
-        name: file.name || 'document.pdf'
-      };
-      
-      // Append file as the first field - this is important for multipart/form-data parsing
-      formData.append('file', fileToUpload);
-      
-      // Add additional fields after the file
-      formData.append('conversation_id', currentConversation.id);
-      
-      // Upload document
-      const response = await api.post('/documents/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          'Accept': 'application/json',
-        },
-        transformRequest: () => formData, // Prevent axios from trying to transform the FormData
+      // Update messages list - replace the temporary message with the permanent document message
+      setMessages(prev => {
+        // Filter out the temporary message
+        const filteredMessages = prev.filter(msg => 
+          !msg.id.toString().startsWith('temp-doc-')
+        );
+        
+        // Add the new permanent document message
+        return [...filteredMessages, permaMessage];
       });
       
-      // Update with actual message from server
-      if (response.data) {
-        setMessages(prev => prev.map(msg => 
-          msg.id === tempMessage.id ? response.data : msg
-        ));
+      // Send the document to the AI for processing
+      try {
+        // Create a message indicating the document was shared
+        const documentNotificationText = `I've shared a ${documentData.document_type || 'document'} with you.`;
+          // Send this notification to the AI with type 'document'
+        await chatService.sendMessageToAI(
+          documentNotificationText, 
+          currentConversation.id,
+          documentData.document_url,  // Pass the document URL for AI processing
+          'document'  // Explicitly set the message type as "document"
+        );
+        
+        // The AI response will be fetched in the regular message polling cycle
+      } catch (aiErr) {
+        console.error('Error notifying AI about document:', aiErr);
+        // Continue processing - this is not a critical error
       }
-      
-    } catch (err) {
-      console.error('Error uploading document:', err);
-      Alert.alert('Error', 'Failed to upload document. Please try again.');
-      
-      // Remove temporary message on error
-      setMessages(prev => prev.filter(msg => 
-        !msg.id.toString().startsWith('temp-')
-      ));
-    } finally {
-      setSendingMessage(false);
+    } else {
+      Alert.alert('Warning', 'Document was uploaded but some information is missing. It may not display correctly.');
     }
-  };
+    
+    setSendingMessage(false);
+      } catch (err) {
+    console.error('Error uploading document:', err);
+    
+    // Extract error message from response if available
+    let errorMessage = 'Failed to upload document. Please try again.';
+    
+    if (err.response) {
+      console.error('Error response data:', JSON.stringify(err.response.data));
+      
+      if (err.response.data.detail) {
+        // Handle array of validation errors
+        if (Array.isArray(err.response.data.detail)) {
+          errorMessage = err.response.data.detail
+            .map(item => `${item.msg} (${item.loc.join('.')})`)
+            .join('\n');
+        } else {
+          errorMessage = err.response.data.detail;
+        }
+      }
+    } else if (err.message) {
+      errorMessage = err.message;
+    }
+    
+    Alert.alert('Error', errorMessage);
+    
+    // Remove temporary message on error
+    setMessages(prev => prev.filter(msg => 
+      !msg.id.toString().startsWith('temp-')
+    ));
+    setSendingMessage(false);
+  }
+};
+  
     // Update language preference
   const handleLanguageChange = async (language) => {
     try {
@@ -413,13 +558,12 @@ const AiChatScreen = () => {
           onEndReachedThreshold={0.1}
           inverted={false} // Set to true if you need older messages at the bottom
         />
-      )}
-
-      <ChatInput 
+      )}      <ChatInput 
         onSendText={handleSendText} 
         onSendDocument={handleSendDocument}
         isLoading={sendingMessage}
         disabled={!currentConversation}
+        inputText={autoMessage && !autoSend ? autoMessage : ''} // Show message in input if autoSend is false
       />
       
       {/* Language Selection Modal */}

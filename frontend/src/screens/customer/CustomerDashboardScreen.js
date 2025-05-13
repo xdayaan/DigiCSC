@@ -30,9 +30,7 @@ const CustomerDashboardScreen = ({ navigation }) => {
           >
             <Ionicons name="chatbubbles-outline" size={24} color="#0066CC" />
             <Text style={styles.actionText}>AI Assistant</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
+          </TouchableOpacity>          <TouchableOpacity 
             style={styles.actionButton}
             onPress={() => navigation.navigate('FreelancerList')}
           >
@@ -40,7 +38,13 @@ const CustomerDashboardScreen = ({ navigation }) => {
             <Text style={styles.actionText}>Find a Freelancer</Text>
           </TouchableOpacity>
           
-          
+          <TouchableOpacity 
+            style={styles.actionButton}
+            onPress={() => navigation.navigate('AppScreen')}
+          >
+            <Ionicons name="apps-outline" size={24} color="#0066CC" />
+            <Text style={styles.actionText}>Services</Text>
+          </TouchableOpacity>
           
           <TouchableOpacity style={styles.actionButton}>
             <Ionicons name="person-outline" size={24} color="#0066CC" />
